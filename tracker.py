@@ -1342,13 +1342,26 @@ def log_change(old_vol: int, new_vol: int, audio_procs: list, all_procs: list,
 
 class VolumeMonitor:
     def __init__(self, overlay: VolumeOverlay):
-        self.last_vol = get_mic_volume()
         self.icon = None
         self.overlay = overlay
         self._stop = threading.Event()
-        # Volume lock state
-        self.locked = False
-        self.target_vol = self.last_vol if self.last_vol is not None else 80
+
+        # Lock state: persisted across runs. First-time default = locked at 90%.
+        settings = load_settings()
+        self.locked = bool(settings.get("mic_locked", True))
+        self.target_vol = int(settings.get("mic_lock_target", 90))
+
+        # If locked at startup, snap the mic to the target before reading it
+        # so last_vol reflects the locked value (not whatever Windows had).
+        if self.locked:
+            set_mic_volume(self.target_vol)
+        self.last_vol = get_mic_volume()
+
+    def _persist_lock(self):
+        settings = load_settings()
+        settings["mic_locked"] = self.locked
+        settings["mic_lock_target"] = self.target_vol
+        save_settings(settings)
 
     def start(self):
         t = threading.Thread(target=self._loop, daemon=True)
@@ -1364,6 +1377,7 @@ class VolumeMonitor:
         set_mic_volume(self.target_vol)
         self.last_vol = self.target_vol
         self.overlay.root.after(0, self.overlay.update, self.target_vol, True)
+        self._persist_lock()
         self._rebuild_menu()
 
     def disable_lock(self):
@@ -1371,6 +1385,7 @@ class VolumeMonitor:
         current = get_mic_volume()
         if current is not None:
             self.overlay.root.after(0, self.overlay.update, current, False)
+        self._persist_lock()
         self._rebuild_menu()
 
     def _rebuild_menu(self):
