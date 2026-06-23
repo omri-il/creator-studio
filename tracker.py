@@ -68,6 +68,9 @@ DASHBOARD_RUNBAT = os.path.join(
 )
 DASHBOARD_URL = "http://127.0.0.1:5007/"
 HAS_DASHBOARD = os.path.isfile(DASHBOARD_RUNBAT)
+_CONTROL_DIR = os.path.dirname(DASHBOARD_RUNBAT)
+BOT_BAT = os.path.join(_CONTROL_DIR, "bot.bat")
+WATCH_BAT = os.path.join(_CONTROL_DIR, "watch.bat")
 
 # Possible install locations for DaVinci Resolve on this user's machines
 DAVINCI_EXE_CANDIDATES = [
@@ -1481,6 +1484,20 @@ def open_davinci_dashboard(icon=None, item=None):
     webbrowser.open(DASHBOARD_URL)
 
 
+def start_davinci_bot(icon=None, item=None):
+    """Start the DaVinci Telegram bot in its own console window."""
+    if os.path.isfile(BOT_BAT):
+        subprocess.Popen([BOT_BAT], cwd=os.path.dirname(BOT_BAT),
+                        creationflags=subprocess.CREATE_NEW_CONSOLE)
+
+
+def start_davinci_watch(icon=None, item=None):
+    """Start the DaVinci watch-folder ingest in its own console window."""
+    if os.path.isfile(WATCH_BAT):
+        subprocess.Popen([WATCH_BAT], cwd=os.path.dirname(WATCH_BAT),
+                        creationflags=subprocess.CREATE_NEW_CONSOLE)
+
+
 def build_menu(monitor: VolumeMonitor):
     def current_vol_label(item):
         vol = monitor.last_vol
@@ -1506,6 +1523,10 @@ def build_menu(monitor: VolumeMonitor):
     ]
     if HAS_DASHBOARD:
         items.append(pystray.MenuItem("🎬 DaVinci Dashboard", open_davinci_dashboard))
+        if os.path.isfile(BOT_BAT):
+            items.append(pystray.MenuItem("📱 Start Telegram bot", start_davinci_bot))
+        if os.path.isfile(WATCH_BAT):
+            items.append(pystray.MenuItem("📂 Start watch folder", start_davinci_watch))
         items.append(pystray.Menu.SEPARATOR)
     items += [
         pystray.MenuItem("Open Log File", open_log),
