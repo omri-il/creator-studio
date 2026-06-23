@@ -61,6 +61,14 @@ DAVINCI_IMPORT_PROXY_SCRIPT = r"E:\DaVinci Automation\scripts\utils\import_and_p
 DAVINCI_DEFAULT_BASE = r"E:\Video Projects"
 HAS_DAVINCI = os.path.isfile(DAVINCI_NEW_PROJECT_SCRIPT)
 
+# DaVinci Control Center — local web dashboard (lives in the davinci-automation repo).
+# Path resolves per-machine from the current user profile.
+DASHBOARD_RUNBAT = os.path.join(
+    os.path.expanduser("~"), "Projects", "davinci-automation", "control", "run.bat"
+)
+DASHBOARD_URL = "http://127.0.0.1:5007/"
+HAS_DASHBOARD = os.path.isfile(DASHBOARD_RUNBAT)
+
 # Possible install locations for DaVinci Resolve on this user's machines
 DAVINCI_EXE_CANDIDATES = [
     r"E:\Program Files\Blackmagic Design\DaVinci Resolve\Resolve.exe",
@@ -1447,6 +1455,32 @@ def open_log(icon, item):
     subprocess.Popen(["notepad.exe", LOG_FILE])
 
 
+def open_davinci_dashboard(icon=None, item=None):
+    """Open the DaVinci Control Center web dashboard, starting its server first
+    if it isn't already running on port 5007."""
+    import webbrowser
+    import urllib.request
+
+    def _up():
+        try:
+            urllib.request.urlopen(DASHBOARD_URL, timeout=1)
+            return True
+        except Exception:
+            return False
+
+    if not _up() and os.path.isfile(DASHBOARD_RUNBAT):
+        subprocess.Popen(
+            [DASHBOARD_RUNBAT],
+            cwd=os.path.dirname(DASHBOARD_RUNBAT),
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
+        )
+        for _ in range(24):  # wait up to ~12s for Flask to come up
+            if _up():
+                break
+            time.sleep(0.5)
+    webbrowser.open(DASHBOARD_URL)
+
+
 def build_menu(monitor: VolumeMonitor):
     def current_vol_label(item):
         vol = monitor.last_vol
@@ -1464,14 +1498,20 @@ def build_menu(monitor: VolumeMonitor):
         else:
             monitor.enable_lock()
 
-    return pystray.Menu(
+    items = [
         pystray.MenuItem(current_vol_label, None, enabled=False),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(lock_label, toggle_lock),
         pystray.Menu.SEPARATOR,
+    ]
+    if HAS_DASHBOARD:
+        items.append(pystray.MenuItem("🎬 DaVinci Dashboard", open_davinci_dashboard))
+        items.append(pystray.Menu.SEPARATOR)
+    items += [
         pystray.MenuItem("Open Log File", open_log),
         pystray.MenuItem("Exit", lambda icon, item: icon.stop()),
-    )
+    ]
+    return pystray.Menu(*items)
 
 
 def main():
