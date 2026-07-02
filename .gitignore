@@ -1,7 +1,10 @@
 mic_log.txt
+settings.json
 __pycache__/
+.pytest_cache/
 *.pyc
 .env
 build/
 dist/
 *.spec.bak
+*.concat.txt

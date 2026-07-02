@@ -1,0 +1,427 @@
+"""DJI Osmo Pocket auto-import: detect the camera, scan its clips, group split
+recordings into sessions, copy idempotently, merge losslessly, optionally
+transcribe.
+
+Split into PURE logic (timeline + grouping + manifest keys — unit-tested in
+tests/test_osmo.py) and IO (drive detection, scan, copy, orchestration).
+
+Key facts this encodes:
+- DJI splits one long recording into ~4 GB chunks. Those chunks are *contiguous*
+  in time; separate takes leave a real gap. We group by time contiguity +
+  matching video params, so it works regardless of the exact P4 file naming.
+- The camera writes a low-res proxy (`.LRF`) and sometimes a telemetry sidecar
+  (`.SRT`) next to each clip. We never transfer those — only the full `.MP4`.
+- Never re-copy a clip already imported (manifest keyed by name + size).
+"""
+from __future__ import annotations
+
+import ctypes
+import os
+import re
+import shutil
+from datetime import datetime
+from pathlib import Path
+
+import mediatools
+from settings_store import get_setting, set_setting
+
+# Sidecars the camera writes next to each real clip — never transferred.
+SKIP_EXTS = {".lrf", ".srt", ".thm", ".gif"}
+
+DEFAULT_BACKUP_ROOT = r"E:\Video Projects\Osmo Imports"
+MANIFEST_NAME = "imported.json"          # lives in the backup root
+SESSION_MAX_GAP = 5.0                    # seconds between clips → same recording
+
+# DJI filenames often embed a start timestamp, e.g. DJI_20240115143022_0001_D.MP4
+_DJI_TS = re.compile(r"(20\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PURE LOGIC (no IO — unit-tested)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def parse_dji_timestamp(name: str) -> float | None:
+    """Extract a recording start time from a DJI filename → epoch secs (local).
+    Cross-check signal only; the primary anchor is metadata/mtime. None if absent."""
+    m = _DJI_TS.search(name)
+    if not m:
+        return None
+    try:
+        y, mo, d, h, mi, s = (int(x) for x in m.groups())
+        return datetime(y, mo, d, h, mi, s).timestamp()
+    except (ValueError, OverflowError):
+        return None
+
+
+def assign_timeline(clips: list[dict]) -> list[dict]:
+    """Give each clip a consistent `start`/`end` (epoch secs) so grouping can
+    compare them. Picks ONE source for the whole set to avoid mixing clocks:
+
+    - if every clip has embedded `creation_time` (UTC, written by the camera),
+      use it as the start (start = creation_time, end = start + duration);
+    - otherwise fall back to filesystem `mtime` as the end-of-write (end = mtime,
+      start = mtime - duration).
+
+    Each input clip must have: duration, creation_time (or None), mtime.
+    Returns the same dicts with `start`, `end`, `time_source` added.
+    """
+    use_creation = bool(clips) and all(c.get("creation_time") for c in clips)
+    for c in clips:
+        dur = float(c.get("duration") or 0.0)
+        if use_creation:
+            start = float(c["creation_time"])
+            c["start"], c["end"], c["time_source"] = start, start + dur, "creation_time"
+        else:
+            end = float(c.get("mtime") or 0.0)
+            c["start"], c["end"], c["time_source"] = end - dur, end, "mtime"
+    return clips
+
+
+def _params(c: dict) -> tuple:
+    return (c.get("width"), c.get("height"), round(float(c.get("fps") or 0), 2),
+            c.get("vcodec"))
+
+
+def group_sessions(clips: list[dict], max_gap: float = SESSION_MAX_GAP) -> list[list[dict]]:
+    """Group time-adjacent clips with matching video params into sessions.
+
+    `clips` must already have `start`/`end` (see assign_timeline). A new session
+    starts when the gap between the previous clip's end and this clip's start
+    exceeds `max_gap`, or the video params differ. Returns a list of sessions,
+    each a chronological list of clips.
+    """
+    ordered = sorted(clips, key=lambda c: (c.get("start", 0.0), c.get("name", "")))
+    sessions: list[list[dict]] = []
+    for c in ordered:
+        if not sessions:
+            sessions.append([c])
+            continue
+        prev = sessions[-1][-1]
+        gap = float(c.get("start", 0.0)) - float(prev.get("end", 0.0))
+        if _params(c) == _params(prev) and -1.0 <= gap <= max_gap:
+            sessions[-1].append(c)
+        else:
+            sessions.append([c])
+    return sessions
+
+
+def manifest_key(name: str, size: int) -> str:
+    """Stable identity for a source clip — filename + byte size."""
+    return f"{name}|{int(size)}"
+
+
+def session_label(session: list[dict]) -> str:
+    """Human-facing base name for a session's merged output."""
+    first = session[0]
+    start = first.get("start")
+    if start:
+        try:
+            return "Osmo_" + datetime.fromtimestamp(start).strftime("%Y-%m-%d_%H%M%S")
+        except (ValueError, OSError, OverflowError):
+            pass
+    return Path(first.get("name", "session")).stem
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# IO — drive detection
+# ══════════════════════════════════════════════════════════════════════════════
+
+_DRIVE_REMOVABLE, _DRIVE_FIXED, _DRIVE_REMOTE, _DRIVE_CDROM = 2, 3, 4, 5
+
+
+def _drive_type(root: str) -> int:
+    try:
+        return int(ctypes.windll.kernel32.GetDriveTypeW(ctypes.c_wchar_p(root)))
+    except Exception:
+        return 0
+
+
+def _volume_label(root: str) -> str:
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        ctypes.windll.kernel32.GetVolumeInformationW(
+            ctypes.c_wchar_p(root), buf, ctypes.sizeof(buf),
+            None, None, None, None, 0)
+        return buf.value or ""
+    except Exception:
+        return ""
+
+
+def _has_camera_signature(root: str) -> tuple[bool, str]:
+    """A drive looks like a DJI camera if it has a DCIM folder with video files.
+    Returns (is_camera, dcim_path)."""
+    dcim = os.path.join(root, "DCIM")
+    if not os.path.isdir(dcim):
+        return False, ""
+    try:
+        for r, _dirs, files in os.walk(dcim):
+            for fn in files:
+                if os.path.splitext(fn)[1].lower() in mediatools.VIDEO_EXTS:
+                    return True, dcim
+    except Exception:
+        pass
+    return False, ""
+
+
+def detect_camera_drives() -> list[dict]:
+    """Return removable/fixed drives that look like a DJI camera.
+
+    Deliberately excludes REMOTE drives so the Tailscale `E:` network mapping is
+    never mistaken for a camera. Each entry: {root, label, dcim, is_dji}.
+    """
+    import psutil
+    found = []
+    try:
+        parts = psutil.disk_partitions(all=False)
+    except Exception:
+        parts = []
+    for part in parts:
+        root = part.mountpoint
+        if not root:
+            continue
+        if not root.endswith("\\"):
+            root = root + "\\"
+        dtype = _drive_type(root)
+        if dtype in (_DRIVE_REMOTE, _DRIVE_CDROM):   # skip network (Tailscale E:) + optical
+            continue
+        if dtype not in (_DRIVE_REMOVABLE, _DRIVE_FIXED):
+            continue
+        is_cam, dcim = _has_camera_signature(root)
+        if not is_cam:
+            continue
+        label = _volume_label(root)
+        is_dji = "dji" in label.lower() or "osmo" in label.lower() or \
+            any(Path(dcim).rglob("DJI_*"))
+        found.append({"root": root, "label": label, "dcim": dcim, "is_dji": bool(is_dji)})
+    return found
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# IO — scanning
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _load_manifest(backup_root: str) -> dict:
+    import json
+    p = os.path.join(backup_root, MANIFEST_NAME)
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_manifest(backup_root: str, manifest: dict) -> None:
+    import json
+    os.makedirs(backup_root, exist_ok=True)
+    p = os.path.join(backup_root, MANIFEST_NAME)
+    try:
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def get_backup_root() -> str:
+    return get_setting("osmo_backup_root", DEFAULT_BACKUP_ROOT)
+
+
+def set_backup_root(path: str) -> None:
+    set_setting("osmo_backup_root", path)
+
+
+def scan_source(source_dir: str, backup_root: str | None = None) -> dict:
+    """Scan a camera/DCIM folder and return sessions + import plan.
+
+    Skips the `.LRF`/`.SRT` sidecars, probes each real clip, groups them into
+    sessions, and flags which clips were already imported (via the manifest).
+
+    Returns: {source, backup_root, dest_dir, sessions:[{label, clips:[...],
+    already: bool}], counts:{clips, new, sessions}}.
+    """
+    backup_root = backup_root or get_backup_root()
+    manifest = _load_manifest(backup_root)
+
+    files = [f for f in mediatools.find_videos(source_dir, recursive=True)
+             if f.suffix.lower() not in SKIP_EXTS]
+
+    clips = []
+    for f in files:
+        meta = mediatools.probe(f)
+        try:
+            mtime = os.path.getmtime(f)
+        except OSError:
+            mtime = 0.0
+        meta["mtime"] = mtime
+        key = manifest_key(meta["name"], meta["size"])
+        meta["key"] = key
+        meta["already"] = key in manifest
+        clips.append(meta)
+
+    assign_timeline(clips)
+    sessions_raw = group_sessions(clips)
+
+    dest_dir = os.path.join(backup_root, datetime.now().strftime("%Y-%m-%d"))
+    sessions = []
+    for s in sessions_raw:
+        sessions.append({
+            "label": session_label(s),
+            "clips": s,
+            "already": all(c["already"] for c in s),
+            "total_duration": round(sum(float(c.get("duration") or 0) for c in s), 1),
+            "total_size": sum(int(c.get("size") or 0) for c in s),
+        })
+    new_clips = sum(1 for c in clips if not c["already"])
+    return {
+        "source": source_dir,
+        "backup_root": backup_root,
+        "dest_dir": dest_dir,
+        "sessions": sessions,
+        "counts": {"clips": len(clips), "new": new_clips, "sessions": len(sessions)},
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# IO — import orchestration (copy → merge → transcribe)
+# ══════════════════════════════════════════════════════════════════════════════
+
+TRANSCRIBE_SCRIPT = r"E:\DaVinci Automation\scripts\transcription\transcribe-hebrew.py"
+HAS_TRANSCRIBE = os.path.isfile(TRANSCRIBE_SCRIPT)
+
+
+def _copy_with_progress(src: str, dst: str, cb=None):
+    """shutil.copyfile with a progress callback (0..100 of this file)."""
+    total = os.path.getsize(src) or 1
+    done = 0
+    with open(src, "rb") as fsrc, open(dst, "wb") as fdst:
+        while True:
+            chunk = fsrc.read(4 * 1024 * 1024)
+            if not chunk:
+                break
+            fdst.write(chunk)
+            done += len(chunk)
+            if cb:
+                cb(min(100.0, done / total * 100))
+    shutil.copystat(src, dst, follow_symlinks=True)
+
+
+def run_import(source_dir: str, options: dict, progress=None) -> dict:
+    """Execute an import. `options`: {merge, transcribe, keep_originals,
+    backup_root}. `progress(pct, message)` reports 0..100 overall.
+
+    Returns a summary dict: {dest_dir, copied:[...], merged:[...],
+    transcribed:[...], skipped:int, errors:[...]}.
+    """
+    def _p(pct, msg):
+        if progress:
+            try:
+                progress(round(pct, 1), msg)
+            except Exception:
+                pass
+
+    backup_root = options.get("backup_root") or get_backup_root()
+    merge = options.get("merge", True)
+    transcribe = options.get("transcribe", True) and HAS_TRANSCRIBE
+    keep_originals = options.get("keep_originals", True)
+
+    scan = scan_source(source_dir, backup_root)
+    dest_dir = scan["dest_dir"]
+    os.makedirs(dest_dir, exist_ok=True)
+    manifest = _load_manifest(backup_root)
+
+    summary = {"dest_dir": dest_dir, "copied": [], "merged": [],
+               "transcribed": [], "skipped": 0, "errors": []}
+
+    # Only work on clips not already imported.
+    pending_sessions = []
+    for s in scan["sessions"]:
+        new_clips = [c for c in s["clips"] if not c["already"]]
+        summary["skipped"] += len(s["clips"]) - len(new_clips)
+        if new_clips:
+            pending_sessions.append({"label": s["label"], "clips": new_clips})
+
+    total_new = sum(len(s["clips"]) for s in pending_sessions)
+    if total_new == 0:
+        _p(100, "אין קבצים חדשים לייבוא")
+        return summary
+
+    # ── Phase 1: copy (0–60%) ────────────────────────────────────────────────
+    copied_index = 0
+    for s in pending_sessions:
+        s["dest_clips"] = []
+        for c in s["clips"]:
+            dst = os.path.join(dest_dir, c["name"])
+            # avoid clobbering a differently-sized file of the same name
+            if os.path.exists(dst) and os.path.getsize(dst) != int(c.get("size") or -1):
+                stem, ext = os.path.splitext(c["name"])
+                dst = os.path.join(dest_dir, f"{stem}_{int(c.get('size',0))}{ext}")
+            base = copied_index / total_new * 60.0
+
+            def _cb(fp, _base=base):
+                _p(_base + (fp / 100.0) * (60.0 / total_new),
+                   f"מעתיק {c['name']}…")
+            try:
+                _copy_with_progress(c["path"], dst, _cb)
+                s["dest_clips"].append(dst)
+                summary["copied"].append(dst)
+                manifest[c["key"]] = {
+                    "name": c["name"], "size": int(c.get("size") or 0),
+                    "imported_at": datetime.now().isoformat(timespec="seconds"),
+                    "dest": dst,
+                }
+            except Exception as e:
+                summary["errors"].append(f"copy {c['name']}: {e}")
+            copied_index += 1
+    _save_manifest(backup_root, manifest)
+
+    # ── Phase 2: merge sessions (60–85%) ─────────────────────────────────────
+    outputs_for_transcribe = []
+    merge_sessions = [s for s in pending_sessions if len(s["dest_clips"]) > 1]
+    for i, s in enumerate(pending_sessions):
+        clips = s["dest_clips"]
+        if not clips:
+            continue
+        if merge and len(clips) > 1:
+            _p(60 + (i / max(1, len(pending_sessions))) * 25,
+               f"ממזג אירוע: {s['label']}…")
+            out_path = os.path.join(dest_dir, f"{s['label']}_merged.mp4")
+            total_dur = sum(mediatools.probe(c)["duration"] for c in clips)
+            rc, log = mediatools.join(clips, out_path, total_dur)
+            if rc == 0 and os.path.isfile(out_path):
+                summary["merged"].append(out_path)
+                outputs_for_transcribe.append(out_path)
+                if not keep_originals:
+                    for c in clips:
+                        try:
+                            os.remove(c)
+                        except OSError:
+                            pass
+            else:
+                summary["errors"].append(f"merge {s['label']}: {log[-200:]}")
+                outputs_for_transcribe.extend(clips)   # fall back to parts
+        else:
+            outputs_for_transcribe.extend(clips)
+    _ = merge_sessions
+
+    # ── Phase 3: transcribe (85–100%) ────────────────────────────────────────
+    if transcribe and outputs_for_transcribe:
+        import subprocess
+        for i, vid in enumerate(outputs_for_transcribe):
+            _p(85 + (i / max(1, len(outputs_for_transcribe))) * 15,
+               f"מתמלל: {os.path.basename(vid)}…")
+            try:
+                r = subprocess.run(
+                    ["py", "-3.10", TRANSCRIBE_SCRIPT, vid, "--output-dir", dest_dir],
+                    capture_output=True, text=True, timeout=7200,
+                    creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
+                )
+                if r.returncode == 0:
+                    summary["transcribed"].append(vid)
+                else:
+                    summary["errors"].append(
+                        f"transcribe {os.path.basename(vid)}: "
+                        f"{(r.stderr or r.stdout or '').strip()[-200:]}")
+            except Exception as e:
+                summary["errors"].append(f"transcribe {os.path.basename(vid)}: {e}")
+
+    _p(100, "הייבוא הושלם")
+    return summary

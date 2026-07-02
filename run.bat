@@ -1,8 +1,5 @@
 @echo off
+rem Creator Studio — dev launcher (home PC). Opens the windowed app.
 cd /d "%~dp0"
-echo Installing dependencies...
-pip install -r requirements.txt --quiet
-echo.
-echo Starting Studio Flow...
-python tracker.py
-pause
+py -3.10 -m pip install -r requirements.txt --quiet
+py -3.10 tracker.py

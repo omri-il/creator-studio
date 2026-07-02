@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Creator Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;800&family=Heebo:wght@300;400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+  <div class="vignette" aria-hidden="true"></div>
+
+  <!-- ── Console header ─────────────────────────────────────────────────── -->
+  <header class="console">
+    <div class="brand" id="brandHome" title="מסך הבית">
+      <span class="tally"></span>
+      <span class="wordmark">Creator<em>Studio</em></span>
+    </div>
+    <div class="statusstrip">
+      <div class="stat mic" id="micStat" title="עוצמת מיקרופון — לחץ לנעילה/שחרור">
+        <span class="stat-ico">🎙️</span>
+        <div class="meter"><i id="micBar"></i></div>
+        <span class="stat-val" id="micVal">--%</span>
+        <span class="lockchip" id="micLock">🔒</span>
+      </div>
+      <div class="stat cam" id="camStat" title="מצב חיבור מצלמה">
+        <span class="dot"></span><span id="camText">אין מצלמה</span>
+      </div>
+    </div>
+  </header>
+
+  <main id="app">
+    <!-- ── HOME ──────────────────────────────────────────────────────────── -->
+    <section class="view" id="view-home">
+      <div class="hello reveal">
+        <h1>שולחן העבודה</h1>
+        <p>הכלים של האולפן במקום אחד — חבר את ה-Osmo וקבל ייבוא חכם, מיזוג ותמלול.</p>
+      </div>
+
+      <!-- Hero: Osmo import -->
+      <button class="hero reveal" id="heroOsmo">
+        <div class="hero-scan" aria-hidden="true"></div>
+        <div class="hero-main">
+          <div class="hero-badge">התכונה החדשה</div>
+          <h2>ייבוא מ־DJI Osmo Pocket</h2>
+          <p>גיבוי אוטומטי לתיקייה מתוארכת · זיהוי אירועים ומיזוג ללא איבוד איכות · תמלול עברית — הכול בלחיצה אחת.</p>
+          <span class="hero-cta">פתח ייבוא ←</span>
+        </div>
+        <div class="hero-glyph" aria-hidden="true">📷</div>
+      </button>
+
+      <!-- Tool grid -->
+      <div class="grid" id="toolGrid">
+        <div class="tile reveal" data-tool="mic">
+          <div class="tile-ico">🎚️</div>
+          <h3>נעילת מיקרופון</h3>
+          <p id="micTileSub">שומר על עוצמת המיק' קבועה — בשקט, ברקע.</p>
+          <div class="tile-actions">
+            <button class="btn ghost" id="micToggleBtn">טוען…</button>
+          </div>
+        </div>
+
+        <div class="tile reveal" data-tool="davinci" id="tileDavinci">
+          <div class="tile-ico">🎬</div>
+          <h3>DaVinci Resolve</h3>
+          <p>פתיחת Resolve ולוח הבקרה של האוטומציה.</p>
+          <div class="tile-actions">
+            <button class="btn" data-act="davinci-launch">הפעל Resolve</button>
+            <button class="btn ghost" data-act="davinci-dashboard">לוח בקרה</button>
+          </div>
+        </div>
+
+        <div class="tile reveal" data-tool="drive" id="tileDrive">
+          <div class="tile-ico">🗂️</div>
+          <h3>מיפוי כונן וידאו</h3>
+          <p>מיפוי כונן ה-E: של תחנת ה-GPU דרך Tailscale.</p>
+          <div class="tile-actions">
+            <button class="btn ghost" data-act="map-drive">מפה עכשיו</button>
+          </div>
+        </div>
+
+        <div class="tile reveal" data-tool="audio">
+          <div class="tile-ico">📊</div>
+          <h3>בדיקת אודיו ליוטיוב</h3>
+          <p>מדידת LUFS ותיקון עוצמה ל-14- LUFS.</p>
+          <div class="tile-actions">
+            <button class="btn ghost" data-act="audio-pick">בחר קובץ…</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── IMPORT ────────────────────────────────────────────────────────── -->
+    <section class="view hidden" id="view-import">
+      <button class="back" id="backHome">→ חזרה לשולחן</button>
+      <h1 class="view-title">ייבוא מ־Osmo Pocket</h1>
+
+      <div class="banner" id="detectBanner">
+        <span class="banner-ico">🔌</span>
+        <div class="banner-body" id="detectText">מחפש מצלמה מחוברת…</div>
+        <button class="btn ghost small" id="rescanDrivesBtn">רענן</button>
+      </div>
+
+      <div class="panel">
+        <label class="field-label">תיקיית מקור (המצלמה / DCIM)</label>
+        <div class="row">
+          <input type="text" id="sourcePath" class="ltr" placeholder="F:\ או F:\DCIM">
+          <button class="btn ghost" id="pickFolderBtn">בחר…</button>
+          <button class="btn" id="scanBtn">סרוק 🔍</button>
+        </div>
+        <div class="destline">
+          יעד הגיבוי: <span class="mono" id="destPath">—</span>
+          <button class="linkbtn" id="editRootBtn">שנה</button>
+        </div>
+      </div>
+
+      <div id="scanResult" class="hidden"></div>
+
+      <div class="panel options hidden" id="optionsPanel">
+        <div class="opts">
+          <label class="switch"><input type="checkbox" id="optMerge" checked><span class="track"></span><span class="switch-label">מזג קליפים של אותו אירוע</span></label>
+          <label class="switch"><input type="checkbox" id="optTranscribe" checked><span class="track"></span><span class="switch-label">תמלול עברית</span></label>
+          <label class="switch"><input type="checkbox" id="optKeep" checked><span class="track"></span><span class="switch-label">שמור מקור אחרי מיזוג</span></label>
+        </div>
+        <button class="btn big" id="startImportBtn">התחל ייבוא</button>
+      </div>
+
+      <div class="panel job hidden" id="jobPanel">
+        <div class="job-head"><span id="jobMsg">מתחיל…</span><span class="mono" id="jobPct">0%</span></div>
+        <div class="progress"><i id="jobBar"></i></div>
+      </div>
+
+      <div id="donePanel" class="hidden"></div>
+    </section>
+  </main>
+
+  <!-- toast -->
+  <div class="toast hidden" id="toast">
+    <span class="toast-ico">📷</span>
+    <div><b>זוהתה מצלמת Osmo</b><div class="toast-sub" id="toastSub">מוכן לייבוא</div></div>
+    <button class="btn small" id="toastOpen">ייבא</button>
+  </div>
+
+  <!-- audio result modal -->
+  <div class="modal hidden" id="audioModal"><div class="modal-card" id="audioModalCard"></div></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
