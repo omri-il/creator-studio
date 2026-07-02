@@ -4,9 +4,13 @@ Windowed desktop hub for Omri's creator workflow, on the **home PC**. The rebuil
 screen-first successor to the old tray-only "Studio Flow" (renamed in-app to
 **Creator Studio**, v2.0.0). Its star feature is **DJI Osmo Pocket auto-import**.
 
-> Renamed 2026-07-02: folder `mic-volume-tracker` → `creator-studio` and GitHub
-> repo `studio-flow` → `creator-studio` so all three names match the app. The
-> pre-rebuild tray build is recoverable at git tag `studioflow-tray-final`.
+> Renamed 2026-07-02: the app is **Creator Studio**, and the GitHub repo + git
+> remote were renamed `studio-flow` → **`creator-studio`**. The **local folder is
+> still `mic-volume-tracker`** — a Windows background lock (Search indexer /
+> Defender scanning the fresh `dist\` build) blocked the folder rename. To finish
+> it, close everything using the folder (or reboot) and run:
+> `mv C:\Users\omrii\Projects\mic-volume-tracker C:\Users\omrii\Projects\creator-studio`
+> The pre-rebuild tray build is recoverable at git tag `studioflow-tray-final`.
 
 ## What it does
 - **Osmo import (the reason it exists):** plug in the camera → a notification +
