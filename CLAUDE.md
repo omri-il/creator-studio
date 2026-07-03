@@ -112,7 +112,13 @@ So it works regardless of the exact P4 filename convention. Threshold is tunable
   `Library cublas64_12.dll ... cannot be loaded` *after* the 3 GB model loaded. The
   default `vps` backend needs none of this (VPS does the work). Long footage is slow
   on either (GPU minutes / VPS queue+credits).
-- **VPS backend caveat:** OpenAI's Whisper API caps a request at 25 MB. A long Osmo
-  recording's 32 kbps MP3 can exceed that (~2 h ≈ 28 MB) — if the whisper-agent
-  doesn't chunk, very long clips may fail on the VPS and fall back via the retry /
-  re-transcribe path. Validate against a full-length recording.
+- **VPS backend & long files:** OpenAI's Whisper API caps a request at 25 MB, but
+  the whisper-agent handles this itself — `transcriber/whisper_client.py` auto-splits
+  audio >24 MB into 10-min chunks and stitches the result. So even multi-hour Osmo
+  recordings transcribe fine via `vps` (verified: the 2h46m file's full transcript
+  came back). No local size handling needed.
+- **Local backend teardown crash (cosmetic):** on long footage `transcribe-hebrew.py`
+  finishes and writes the `.srt`/`.txt`/`.json` correctly, then the process can crash
+  on CUDA/interpreter teardown with exit `0xC0000409` — a *false negative*. The
+  outputs are valid. Another reason `vps` is the default. If reviving heavy use of
+  `local`, treat "`.srt` exists" as success rather than trusting the exit code.
