@@ -81,7 +81,16 @@ So it works regardless of the exact P4 filename convention. Threshold is tunable
   corrupts the WebView2/.NET DLLs) → Inno Setup (`installer.iss`) →
   `dist\installer\CreatorStudio-Setup-2.0.0.exe`. New app identity
   (GUID `7C1E9A44-…`); its installer kills the old `StudioFlow.exe` and removes the
-  old "Studio Flow" startup shortcut so only the new app auto-starts.
+  old "Studio Flow" startup shortcut so only the new app auto-starts. `build.bat`
+  ends with `pause` — run the two steps directly when scripting headless.
+- **⚠️ Windows Defender false-positive on every fresh build:** the newly built
+  `CreatorStudio.exe` (PyInstaller bootloader) gets flagged `Trojan:Win32/Bearfoos.A!ml`
+  — an ML heuristic, **not** real malware — and Defender quarantines it mid-install
+  (the installer dies with *"CreateProcess failed; code 225 … contains a virus"*).
+  Fix once per rebuilt exe: **Windows Security → Virus & threat protection →
+  Protection history → the Bearfoos entry → Actions → Allow** (restores the exe +
+  whitelists it). Each rebuild has a new hash and may need Allow again. Permanent
+  fixes if this gets old: code-sign the exe, or just run from source (`run.bat`).
 
 ## Config / defaults
 - Osmo backup root default: `E:\Video Projects\Osmo Imports\` (dated subfolder per
