@@ -19,7 +19,16 @@ const fmtDur = (s) => {
   return m + ":" + String(s % 60).padStart(2, "0");
 };
 
-let state = { source: "", lastDrive: null, toastDismissed: false, features: {} };
+let state = { source: "", lastDrive: null, toastDismissed: false, features: {}, txBackend: "vps" };
+
+/* transcription backend chooser (☁️ שרת whisper-agent / 💻 מקומי GPU) */
+function setTxBackend(b, save) {
+  state.txBackend = b === "local" ? "local" : "vps";
+  document.querySelectorAll("#txSeg .seg-btn").forEach((el) =>
+    el.classList.toggle("on", el.dataset.backend === state.txBackend));
+  if (save) post("/api/osmo/config", { transcribe_backend: state.txBackend });
+}
+const txLabel = (b) => (b === "local" ? " · 💻 מקומי" : b === "vps" ? " · ☁️ שרת" : "");
 
 /* ── views ──────────────────────────────────────────────────────────────── */
 function showHome() {
@@ -105,6 +114,7 @@ async function loadDest() {
     const c = await api("/api/osmo/config");
     $("#destPath").textContent = c.backup_root + "\\<תאריך>";
     $("#destPath").dataset.root = c.backup_root;
+    if (c.transcribe_backend) setTxBackend(c.transcribe_backend, false);
   } catch (e) {}
 }
 async function editRoot() {
@@ -167,6 +177,7 @@ async function startImport() {
     source: state.source,
     merge: $("#optMerge").checked,
     transcribe: $("#optTranscribe").checked,
+    transcribe_backend: state.txBackend,
     keep_originals: $("#optKeep").checked,
     backup_root: $("#destPath").dataset.root,
   };
@@ -196,7 +207,7 @@ function renderDone(r) {
     <ul>
       <li><b>${r.copied.length}</b> קבצים הועתקו · <b>${r.skipped}</b> דולגו (כבר יובאו)</li>
       ${r.merged.length ? `<li><b>${r.merged.length}</b> אירועים מוזגו ללא איבוד איכות</li>` : ""}
-      ${r.transcribed.length ? `<li><b>${r.transcribed.length}</b> קבצים תומללו</li>` : ""}
+      ${r.transcribed.length ? `<li><b>${r.transcribed.length}</b> קבצים תומללו${txLabel(r.transcribe_backend)}</li>` : ""}
       ${canTx ? `<li class="warn"><b>${failed.length}</b> קבצים ממתינים לתמלול</li>` : ""}
     </ul>`;
   if (r.errors && r.errors.length)
@@ -217,7 +228,7 @@ window.reveal = (p) => post("/api/reveal", { path: p });
 async function retranscribe(paths, destDir) {
   const rt = $("#retryTxBtn");
   if (rt) { rt.disabled = true; rt.textContent = "מתמלל…"; }
-  const r = await post("/api/osmo/transcribe", { paths, dest_dir: destDir });
+  const r = await post("/api/osmo/transcribe", { paths, dest_dir: destDir, transcribe_backend: state.txBackend });
   if (!r.ok) { alert(r.error || "התמלול נכשל להתחיל"); if (rt) { rt.disabled = false; rt.textContent = `🎙️ תמלל (${paths.length})`; } return; }
   $("#donePanel").classList.add("hidden");
   $("#jobPanel").classList.remove("hidden");
@@ -326,8 +337,13 @@ async function init() {
     const st = await api("/api/status");
     state.features = st.features || {};
     renderMic(st.mic);
+    if (st.transcribe_backend) setTxBackend(st.transcribe_backend, false);
     if (!state.features.davinci) $("#tileDavinci")?.classList.add("hidden");
     if (!state.features.map_drive) $("#tileDrive")?.classList.add("hidden");
+    // Only offer the backend chooser when both backends are actually available.
+    const f = state.features;
+    if (f.transcribe && !(f.transcribe_local && f.transcribe_vps))
+      $("#txBackendRow")?.classList.add("hidden");
   } catch (e) {}
 
   $("#heroOsmo").onclick = showImport;
@@ -343,6 +359,10 @@ async function init() {
   };
   $("#editRootBtn").onclick = editRoot;
   $("#startImportBtn").onclick = startImport;
+  document.querySelectorAll("#txSeg .seg-btn").forEach((b) =>
+    b.addEventListener("click", () => setTxBackend(b.dataset.backend, true)));
+  $("#optTranscribe").onchange = (e) =>
+    $("#txBackendRow")?.classList.toggle("dim", !e.target.checked);
   $("#toastOpen").onclick = () => { state.toastDismissed = true; showImport(); scan(); };
   document.querySelectorAll("[data-act]").forEach((b) =>
     b.addEventListener("click", () => toolAction(b.dataset.act)));

@@ -57,10 +57,13 @@ def api_status():
             "davinci": davinci.HAS_DAVINCI,
             "dashboard": davinci.HAS_DASHBOARD,
             "transcribe": osmo_import.HAS_TRANSCRIBE,
+            "transcribe_local": osmo_import.HAS_TRANSCRIBE_LOCAL,
+            "transcribe_vps": osmo_import.HAS_TRANSCRIBE_VPS,
             "map_drive": os.path.isfile(davinci.MAP_DRIVE_SCRIPT),
         },
         "mic": _MIC.status() if _MIC else None,
         "osmo_backup_root": osmo_import.get_backup_root(),
+        "transcribe_backend": osmo_import.get_transcribe_backend(),
     })
 
 
@@ -118,6 +121,7 @@ def api_osmo_import():
     options = {
         "merge": bool(data.get("merge", True)),
         "transcribe": bool(data.get("transcribe", True)),
+        "transcribe_backend": data.get("transcribe_backend"),
         "keep_originals": bool(data.get("keep_originals", True)),
         "backup_root": data.get("backup_root"),
     }
@@ -137,9 +141,10 @@ def api_osmo_transcribe():
         return jsonify({"ok": False, "error": "לא צוינו קבצים לתמלול"}), 400
     if not osmo_import.HAS_TRANSCRIBE:
         return jsonify({"ok": False, "error": "סקריפט התמלול לא נמצא"}), 503
+    backend = data.get("transcribe_backend")
     dest_dir = data.get("dest_dir") or os.path.dirname(paths[0])
     jid = jobs.run(lambda update: osmo_import.transcribe_files(
-        paths, dest_dir, progress=lambda pct, msg: update(pct, msg)))
+        paths, dest_dir, backend=backend, progress=lambda pct, msg: update(pct, msg)))
     return jsonify({"ok": True, "id": jid})
 
 
@@ -149,7 +154,10 @@ def api_osmo_config():
         data = request.get_json(force=True, silent=True) or {}
         if data.get("backup_root"):
             osmo_import.set_backup_root(data["backup_root"])
-    return jsonify({"backup_root": osmo_import.get_backup_root()})
+        if data.get("transcribe_backend"):
+            osmo_import.set_transcribe_backend(data["transcribe_backend"])
+    return jsonify({"backup_root": osmo_import.get_backup_root(),
+                    "transcribe_backend": osmo_import.get_transcribe_backend()})
 
 
 # ── davinci + tools ───────────────────────────────────────────────────────────

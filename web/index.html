@@ -123,6 +123,13 @@
         <div class="opts">
           <label class="switch"><input type="checkbox" id="optMerge" checked><span class="track"></span><span class="switch-label">מזג קליפים של אותו אירוע</span></label>
           <label class="switch"><input type="checkbox" id="optTranscribe" checked><span class="track"></span><span class="switch-label">תמלול עברית</span></label>
+          <div class="tx-backend" id="txBackendRow">
+            <span class="tx-backend-label">מנוע תמלול</span>
+            <div class="seg" id="txSeg">
+              <button type="button" class="seg-btn" data-backend="vps">☁️ שרת (Whisper)</button>
+              <button type="button" class="seg-btn" data-backend="local">💻 מקומי (GPU)</button>
+            </div>
+          </div>
           <label class="switch"><input type="checkbox" id="optKeep" checked><span class="track"></span><span class="switch-label">שמור מקור אחרי מיזוג</span></label>
         </div>
         <button class="btn big" id="startImportBtn">התחל ייבוא</button>

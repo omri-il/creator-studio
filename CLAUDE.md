@@ -63,8 +63,16 @@ So it works regardless of the exact P4 filename convention. Threshold is tunable
   `video-prep/fftools.py` — `mediatools.join` carries it so the packaged `.exe` is
   self-contained (no second process). If strict de-dup is wanted later, extract a
   shared helper.
-- Transcription **shells out** to the davinci-automation CLI (unchanged):
-  `py -3.10 "E:\DaVinci Automation\scripts\transcription\transcribe-hebrew.py" <mp4> --output-dir <dest>`.
+- Transcription **shells out** to one of two davinci-automation CLIs, chosen by
+  the `transcribe_backend` setting (default **`vps`**):
+  - **`vps`** (default) → `transcribe_via_vps.py <mp4> --output <dest>\<stem>.srt` —
+    extracts a tiny 32 kbps MP3 and uploads it to the **whisper-agent** on the VPS
+    (Tailscale `100.94.153.60:8080`, OpenAI Whisper, uses credits, no GPU here).
+    Produces the `.srt` only.
+  - **`local`** → `transcribe-hebrew.py <mp4> --output-dir <dest>` — GPU on this PC
+    (ivrit-ai model; also writes `_transcription.txt`/`.json`/`_fillers.txt`).
+  Routing lives in `osmo_import._run_transcribe`; both are picked in the import
+  screen (segmented toggle) and via `POST /api/osmo/config`.
 
 ## Run / build
 - **Dev:** `run.bat` → opens the window (`py -3.10 tracker.py`). Server: `localhost:5015`.
@@ -79,6 +87,9 @@ So it works regardless of the exact P4 filename convention. Threshold is tunable
 - Osmo backup root default: `E:\Video Projects\Osmo Imports\` (dated subfolder per
   import). Change in the import screen (persisted as `osmo_backup_root`).
 - Default import actions all ON: merge sessions, transcribe Hebrew, keep originals.
+- **Transcription engine defaults to the VPS whisper-agent** (`transcribe_backend`
+  = `vps`; Omri's preference 2026-07-03). Switch to local GPU in the import screen
+  (persisted). See Reuse for the two backends.
 - Mic: first-run default locked at 90% (`mic_locked`/`mic_lock_target` persisted).
 
 ## Notes / follow-ups
@@ -92,10 +103,16 @@ So it works regardless of the exact P4 filename convention. Threshold is tunable
   idempotent import won't re-reach transcription for already-copied clips, the done
   screen shows a **🎙️ תמלל (N)** button that re-transcribes the missing outputs via
   `POST /api/osmo/transcribe` → `osmo_import.transcribe_files`.
-- **Transcription GPU requirement:** `transcribe-hebrew.py` needs the CUDA DLLs from
-  the `nvidia-*-cu12` pip packages **including `nvidia-cuda-runtime-cu12`** (the
-  `cudart64_12.dll` package — easy to miss). Its `add_nvidia_dll_dirs()` now both
-  adds the dirs *and* **preloads** the DLLs by full path — ctranslate2 loads cuBLAS
-  lazily at encode time and ignores `add_dll_directory`, so preloading is required or
-  the GPU dies mid-transcribe with `Library cublas64_12.dll ... cannot be loaded`
-  *after* the 3 GB model already loaded. Long footage is still slow (GPU minutes).
+- **Local (GPU) backend requirement:** only the `local` backend needs the CUDA DLLs
+  from the `nvidia-*-cu12` pip packages **including `nvidia-cuda-runtime-cu12`** (the
+  `cudart64_12.dll` package — easy to miss). `transcribe-hebrew.py`'s
+  `add_nvidia_dll_dirs()` now both adds the dirs *and* **preloads** the DLLs by full
+  path — ctranslate2 loads cuBLAS lazily at encode time and ignores
+  `add_dll_directory`, so preloading is required or the GPU dies mid-transcribe with
+  `Library cublas64_12.dll ... cannot be loaded` *after* the 3 GB model loaded. The
+  default `vps` backend needs none of this (VPS does the work). Long footage is slow
+  on either (GPU minutes / VPS queue+credits).
+- **VPS backend caveat:** OpenAI's Whisper API caps a request at 25 MB. A long Osmo
+  recording's 32 kbps MP3 can exceed that (~2 h ≈ 28 MB) — if the whisper-agent
+  doesn't chunk, very long clips may fail on the VPS and fall back via the retry /
+  re-transcribe path. Validate against a full-length recording.

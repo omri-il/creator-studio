@@ -284,27 +284,56 @@ def scan_source(source_dir: str, backup_root: str | None = None) -> dict:
 # IO — import orchestration (copy → merge → transcribe)
 # ══════════════════════════════════════════════════════════════════════════════
 
-TRANSCRIBE_SCRIPT = r"E:\DaVinci Automation\scripts\transcription\transcribe-hebrew.py"
-HAS_TRANSCRIBE = os.path.isfile(TRANSCRIBE_SCRIPT)
+# Two transcription backends, both shelled out to (one truth: the scripts live in
+# davinci-automation). Default is the VPS whisper-agent (Omri's preference,
+# 2026-07-03) — it uses OpenAI Whisper on the VPS (credits), needs no GPU here, and
+# handles the huge Osmo files by uploading a tiny 32 kbps MP3. 'local' is the
+# on-PC GPU path (ivrit-ai model) — offline, no credits, but ties up the GPU.
+_TRANSCRIBE_DIR = r"E:\DaVinci Automation\scripts\transcription"
+TRANSCRIBE_SCRIPT_LOCAL = os.path.join(_TRANSCRIBE_DIR, "transcribe-hebrew.py")
+TRANSCRIBE_SCRIPT_VPS = os.path.join(_TRANSCRIBE_DIR, "transcribe_via_vps.py")
+HAS_TRANSCRIBE_LOCAL = os.path.isfile(TRANSCRIBE_SCRIPT_LOCAL)
+HAS_TRANSCRIBE_VPS = os.path.isfile(TRANSCRIBE_SCRIPT_VPS)
+HAS_TRANSCRIBE = HAS_TRANSCRIBE_LOCAL or HAS_TRANSCRIBE_VPS
+DEFAULT_TRANSCRIBE_BACKEND = "vps"
 
-# The transcription model file (~3 GB) can be momentarily unopenable while an
-# import is hammering the disk — Windows lock / AV scan / I/O thrashing gives a
-# ctranslate2 "Unable to open file 'model.bin'". It clears in seconds, so a fast
-# transient failure is retried; a genuine timeout is NOT (that just means a long
-# recording, and retrying would burn hours).
+# Retry knobs. A fast transient failure is retried; a genuine timeout is NOT (a
+# long recording — retrying would burn hours). Transients differ by backend: the
+# local model file (~3 GB) can be momentarily unopenable during heavy import I/O
+# (ctranslate2 "Unable to open file 'model.bin'"); the VPS path can blip on the
+# network. Both clear on a retry.
 TRANSCRIBE_ATTEMPTS = 3
 TRANSCRIBE_BACKOFF = 15          # seconds, multiplied by the attempt number
 TRANSCRIBE_TIMEOUT = 21600       # 6 h ceiling — comfortably above any one clip
 
 
-def _run_transcribe(vid: str, dest_dir: str) -> tuple[str, str]:
-    """Run the Hebrew transcription CLI once.
-    Returns (status, err_tail) where status is 'ok' | 'fail' | 'timeout'."""
+def get_transcribe_backend() -> str:
+    b = get_setting("transcribe_backend", DEFAULT_TRANSCRIBE_BACKEND)
+    return b if b in ("vps", "local") else DEFAULT_TRANSCRIBE_BACKEND
+
+
+def set_transcribe_backend(backend: str) -> None:
+    if backend in ("vps", "local"):
+        set_setting("transcribe_backend", backend)
+
+
+def backend_available(backend: str) -> bool:
+    return HAS_TRANSCRIBE_VPS if backend == "vps" else HAS_TRANSCRIBE_LOCAL
+
+
+def _run_transcribe(vid: str, dest_dir: str, backend: str) -> tuple[str, str]:
+    """Run one transcription via the chosen backend ('vps' | 'local'). Both write a
+    `<stem>.srt` into dest_dir. Returns (status, err_tail), status ∈ 'ok'|'fail'|'timeout'."""
     import subprocess
+    stem = os.path.splitext(os.path.basename(vid))[0]
+    if backend == "vps":
+        cmd = ["py", "-3.10", TRANSCRIBE_SCRIPT_VPS, vid,
+               "--output", os.path.join(dest_dir, stem + ".srt")]
+    else:
+        cmd = ["py", "-3.10", TRANSCRIBE_SCRIPT_LOCAL, vid, "--output-dir", dest_dir]
     try:
         r = subprocess.run(
-            ["py", "-3.10", TRANSCRIBE_SCRIPT, vid, "--output-dir", dest_dir],
-            capture_output=True, text=True, timeout=TRANSCRIBE_TIMEOUT,
+            cmd, capture_output=True, text=True, timeout=TRANSCRIBE_TIMEOUT,
             creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
         )
     except subprocess.TimeoutExpired:
@@ -316,14 +345,15 @@ def _run_transcribe(vid: str, dest_dir: str) -> tuple[str, str]:
     return "fail", (r.stderr or r.stdout or "").strip()
 
 
-def transcribe_one(vid: str, dest_dir: str, attempts: int = TRANSCRIBE_ATTEMPTS,
-                   on_msg=None) -> tuple[bool, str]:
+def transcribe_one(vid: str, dest_dir: str, backend: str | None = None,
+                   attempts: int = TRANSCRIBE_ATTEMPTS, on_msg=None) -> tuple[bool, str]:
     """Transcribe one file, retrying a *transient* failure with backoff. Returns
     (ok, err_tail). Does not retry a timeout (a genuinely long/hung run)."""
     import time
+    backend = backend or get_transcribe_backend()
     last = ""
     for n in range(1, attempts + 1):
-        status, err = _run_transcribe(vid, dest_dir)
+        status, err = _run_transcribe(vid, dest_dir, backend)
         if status == "ok":
             return True, ""
         last = err
@@ -339,11 +369,12 @@ def transcribe_one(vid: str, dest_dir: str, attempts: int = TRANSCRIBE_ATTEMPTS,
     return False, last
 
 
-def transcribe_files(paths, dest_dir: str, progress=None) -> dict:
+def transcribe_files(paths, dest_dir: str, backend: str | None = None,
+                     progress=None) -> dict:
     """(Re)transcribe an explicit list of already-imported files. Used by the
-    re-transcribe endpoint when the import's transcription phase failed (e.g. a
-    transient model lock) — the idempotent import skips those files and never
-    reaches transcription on its own. Retries each. Returns a summary dict."""
+    re-transcribe endpoint when the import's transcription phase was skipped or
+    failed — the idempotent import skips those files and never reaches
+    transcription on its own. Retries each. Returns a summary dict."""
     def _p(pct, msg):
         if progress:
             try:
@@ -351,8 +382,10 @@ def transcribe_files(paths, dest_dir: str, progress=None) -> dict:
             except Exception:  # noqa: BLE001
                 pass
 
-    out = {"dest_dir": dest_dir, "transcribed": [], "errors": []}
-    if not HAS_TRANSCRIBE:
+    backend = backend or get_transcribe_backend()
+    out = {"dest_dir": dest_dir, "transcribed": [], "errors": [],
+           "transcribe_backend": backend}
+    if not backend_available(backend):
         out["errors"].append("סקריפט התמלול לא נמצא")
         return out
     paths = list(paths or [])
@@ -364,7 +397,8 @@ def transcribe_files(paths, dest_dir: str, progress=None) -> dict:
         if not os.path.isfile(vid):
             out["errors"].append(f"transcribe {base}: הקובץ לא נמצא")
             continue
-        ok, err = transcribe_one(vid, dest_dir, on_msg=lambda m, _pct=pct: _p(_pct, m))
+        ok, err = transcribe_one(vid, dest_dir, backend=backend,
+                                 on_msg=lambda m, _pct=pct: _p(_pct, m))
         if ok:
             out["transcribed"].append(vid)
         else:
@@ -405,7 +439,8 @@ def run_import(source_dir: str, options: dict, progress=None) -> dict:
 
     backup_root = options.get("backup_root") or get_backup_root()
     merge = options.get("merge", True)
-    transcribe = options.get("transcribe", True) and HAS_TRANSCRIBE
+    backend = options.get("transcribe_backend") or get_transcribe_backend()
+    transcribe = options.get("transcribe", True) and backend_available(backend)
     keep_originals = options.get("keep_originals", True)
 
     scan = scan_source(source_dir, backup_root)
@@ -415,7 +450,7 @@ def run_import(source_dir: str, options: dict, progress=None) -> dict:
 
     summary = {"dest_dir": dest_dir, "copied": [], "merged": [],
                "transcribe_targets": [], "transcribed": [], "skipped": 0,
-               "errors": []}
+               "errors": [], "transcribe_backend": backend}
 
     # Only work on clips not already imported.
     pending_sessions = []
@@ -498,7 +533,7 @@ def run_import(source_dir: str, options: dict, progress=None) -> dict:
         for i, vid in enumerate(outputs_for_transcribe):
             cur = 85 + (i / max(1, n)) * 15
             _p(cur, f"מתמלל: {os.path.basename(vid)}…")
-            ok, err = transcribe_one(vid, dest_dir,
+            ok, err = transcribe_one(vid, dest_dir, backend=backend,
                                      on_msg=lambda m, _c=cur: _p(_c, m))
             if ok:
                 summary["transcribed"].append(vid)
