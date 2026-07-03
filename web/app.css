@@ -187,6 +187,7 @@ main{max-width:980px;margin:0 auto;padding:34px 26px 80px;position:relative;z-in
 .done ul{list-style:none;margin:12px 0;display:flex;flex-direction:column;gap:6px}
 .done li{font-size:14px;color:var(--muted)}
 .done li b{color:var(--text)}
+.done li.warn{color:var(--amber)}
 .done .errs{color:var(--red);font-size:13px;margin-top:8px}
 .done-actions{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
 

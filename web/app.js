@@ -188,22 +188,67 @@ function renderDone(r) {
   $("#jobPanel").classList.add("hidden");
   if (!r) return;
   const box = $("#donePanel");
+  // Which transcription targets never got a transcript (skipped or failed)?
+  const done = new Set(r.transcribed || []);
+  const failed = (r.transcribe_targets || []).filter((p) => !done.has(p));
+  const canTx = state.features.transcribe && failed.length;
   let html = `<div class="done"><h2>✅ הייבוא הושלם</h2>
     <ul>
       <li><b>${r.copied.length}</b> קבצים הועתקו · <b>${r.skipped}</b> דולגו (כבר יובאו)</li>
       ${r.merged.length ? `<li><b>${r.merged.length}</b> אירועים מוזגו ללא איבוד איכות</li>` : ""}
       ${r.transcribed.length ? `<li><b>${r.transcribed.length}</b> קבצים תומללו</li>` : ""}
+      ${canTx ? `<li class="warn"><b>${failed.length}</b> קבצים ממתינים לתמלול</li>` : ""}
     </ul>`;
   if (r.errors && r.errors.length)
     html += `<div class="errs">שגיאות: ${r.errors.slice(0, 4).join(" · ")}</div>`;
   html += `<div class="done-actions">
+      ${canTx ? `<button class="btn" id="retryTxBtn">🎙️ תמלל (${failed.length})</button>` : ""}
       <button class="btn" onclick="reveal('${r.dest_dir.replace(/\\/g, "\\\\")}')">📁 פתח תיקיית יעד</button>
       <button class="btn ghost" onclick="location.reload()">ייבוא נוסף</button>
     </div></div>`;
   box.innerHTML = html;
   box.classList.remove("hidden");
+  const rt = $("#retryTxBtn");
+  if (rt) rt.onclick = () => retranscribe(failed, r.dest_dir);
 }
 window.reveal = (p) => post("/api/reveal", { path: p });
+
+/* (Re)transcribe already-imported files that were skipped or failed. */
+async function retranscribe(paths, destDir) {
+  const rt = $("#retryTxBtn");
+  if (rt) { rt.disabled = true; rt.textContent = "מתמלל…"; }
+  const r = await post("/api/osmo/transcribe", { paths, dest_dir: destDir });
+  if (!r.ok) { alert(r.error || "התמלול נכשל להתחיל"); if (rt) { rt.disabled = false; rt.textContent = `🎙️ תמלל (${paths.length})`; } return; }
+  $("#donePanel").classList.add("hidden");
+  $("#jobPanel").classList.remove("hidden");
+  pollJob(r.id, (j) => {
+    $("#jobBar").style.width = (j.progress || 0) + "%";
+    $("#jobPct").textContent = Math.round(j.progress || 0) + "%";
+    $("#jobMsg").textContent = j.message || "";
+  }, (j) => renderTxDone(j.result, paths), (j) => { $("#jobMsg").textContent = j.message || "שגיאה"; });
+}
+
+function renderTxDone(res, attempted) {
+  $("#jobPanel").classList.add("hidden");
+  const box = $("#donePanel");
+  if (!res) { box.classList.remove("hidden"); return; }
+  const ok = (res.transcribed || []).length;
+  const errs = res.errors || [];
+  const done = new Set(res.transcribed || []);
+  const remaining = (attempted || []).filter((p) => !done.has(p));
+  let html = `<div class="done"><h2>${errs.length ? "⚠️" : "✅"} תמלול</h2>
+    <ul><li><b>${ok}</b> קבצים תומללו${remaining.length ? ` · <b>${remaining.length}</b> עדיין ממתינים` : ""}</li></ul>`;
+  if (errs.length) html += `<div class="errs">שגיאות: ${errs.slice(0, 4).join(" · ")}</div>`;
+  html += `<div class="done-actions">
+      ${remaining.length ? `<button class="btn" id="retryTxBtn">🔁 נסה שוב (${remaining.length})</button>` : ""}
+      <button class="btn" onclick="reveal('${(res.dest_dir || "").replace(/\\/g, "\\\\")}')">📁 פתח תיקיית יעד</button>
+      <button class="btn ghost" onclick="location.reload()">חזרה</button>
+    </div></div>`;
+  box.innerHTML = html;
+  box.classList.remove("hidden");
+  const rt = $("#retryTxBtn");
+  if (rt) rt.onclick = () => retranscribe(remaining, res.dest_dir);
+}
 
 /* generic job poller */
 function pollJob(id, onProgress, onDone, onError) {

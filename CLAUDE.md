@@ -84,7 +84,18 @@ So it works regardless of the exact P4 filename convention. Threshold is tunable
 ## Notes / follow-ups
 - Requires the **DJI in USB mass-storage (drive-letter) mode**, not MTP. Detection
   excludes REMOTE drives so the Tailscale `E:` mapping is never mistaken for a camera.
-- Validate the exact Osmo Pocket 4 filenames/split behaviour against a real card and
-  adjust `SESSION_MAX_GAP` if needed.
-- Transcription of long footage is slow (GPU minutes) — it's the last import phase
-  and optional.
+- ✅ **Verified against a real Osmo Pocket 4 card (2026-07-03):** filenames
+  (`DJI_<ts>_NNNN_D.MP4`) group into sessions correctly and the lossless merge is
+  exact. `SESSION_MAX_GAP` (5 s) left as-is — no adjustment needed.
+- **Transcription is resilient now (2026-07-03):** the import's transcribe phase
+  retries transient failures with backoff (`transcribe_one`), and because the
+  idempotent import won't re-reach transcription for already-copied clips, the done
+  screen shows a **🎙️ תמלל (N)** button that re-transcribes the missing outputs via
+  `POST /api/osmo/transcribe` → `osmo_import.transcribe_files`.
+- **Transcription GPU requirement:** `transcribe-hebrew.py` needs the CUDA DLLs from
+  the `nvidia-*-cu12` pip packages **including `nvidia-cuda-runtime-cu12`** (the
+  `cudart64_12.dll` package — easy to miss). Its `add_nvidia_dll_dirs()` now both
+  adds the dirs *and* **preloads** the DLLs by full path — ctranslate2 loads cuBLAS
+  lazily at encode time and ignores `add_dll_directory`, so preloading is required or
+  the GPU dies mid-transcribe with `Library cublas64_12.dll ... cannot be loaded`
+  *after* the 3 GB model already loaded. Long footage is still slow (GPU minutes).

@@ -287,6 +287,91 @@ def scan_source(source_dir: str, backup_root: str | None = None) -> dict:
 TRANSCRIBE_SCRIPT = r"E:\DaVinci Automation\scripts\transcription\transcribe-hebrew.py"
 HAS_TRANSCRIBE = os.path.isfile(TRANSCRIBE_SCRIPT)
 
+# The transcription model file (~3 GB) can be momentarily unopenable while an
+# import is hammering the disk — Windows lock / AV scan / I/O thrashing gives a
+# ctranslate2 "Unable to open file 'model.bin'". It clears in seconds, so a fast
+# transient failure is retried; a genuine timeout is NOT (that just means a long
+# recording, and retrying would burn hours).
+TRANSCRIBE_ATTEMPTS = 3
+TRANSCRIBE_BACKOFF = 15          # seconds, multiplied by the attempt number
+TRANSCRIBE_TIMEOUT = 21600       # 6 h ceiling — comfortably above any one clip
+
+
+def _run_transcribe(vid: str, dest_dir: str) -> tuple[str, str]:
+    """Run the Hebrew transcription CLI once.
+    Returns (status, err_tail) where status is 'ok' | 'fail' | 'timeout'."""
+    import subprocess
+    try:
+        r = subprocess.run(
+            ["py", "-3.10", TRANSCRIBE_SCRIPT, vid, "--output-dir", dest_dir],
+            capture_output=True, text=True, timeout=TRANSCRIBE_TIMEOUT,
+            creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
+        )
+    except subprocess.TimeoutExpired:
+        return "timeout", "התמלול חרג מזמן מרבי"
+    except Exception as e:  # noqa: BLE001
+        return "fail", str(e)
+    if r.returncode == 0:
+        return "ok", ""
+    return "fail", (r.stderr or r.stdout or "").strip()
+
+
+def transcribe_one(vid: str, dest_dir: str, attempts: int = TRANSCRIBE_ATTEMPTS,
+                   on_msg=None) -> tuple[bool, str]:
+    """Transcribe one file, retrying a *transient* failure with backoff. Returns
+    (ok, err_tail). Does not retry a timeout (a genuinely long/hung run)."""
+    import time
+    last = ""
+    for n in range(1, attempts + 1):
+        status, err = _run_transcribe(vid, dest_dir)
+        if status == "ok":
+            return True, ""
+        last = err
+        if status == "timeout" or n >= attempts:
+            break
+        wait = TRANSCRIBE_BACKOFF * n
+        if on_msg:
+            try:
+                on_msg(f"התמלול נכשל זמנית, מנסה שוב בעוד {wait}ש׳ ({n}/{attempts})…")
+            except Exception:  # noqa: BLE001
+                pass
+        time.sleep(wait)
+    return False, last
+
+
+def transcribe_files(paths, dest_dir: str, progress=None) -> dict:
+    """(Re)transcribe an explicit list of already-imported files. Used by the
+    re-transcribe endpoint when the import's transcription phase failed (e.g. a
+    transient model lock) — the idempotent import skips those files and never
+    reaches transcription on its own. Retries each. Returns a summary dict."""
+    def _p(pct, msg):
+        if progress:
+            try:
+                progress(round(pct, 1) if pct is not None else None, msg)
+            except Exception:  # noqa: BLE001
+                pass
+
+    out = {"dest_dir": dest_dir, "transcribed": [], "errors": []}
+    if not HAS_TRANSCRIBE:
+        out["errors"].append("סקריפט התמלול לא נמצא")
+        return out
+    paths = list(paths or [])
+    n = len(paths)
+    for i, vid in enumerate(paths):
+        base = os.path.basename(vid)
+        pct = i / max(1, n) * 100
+        _p(pct, f"מתמלל: {base}…")
+        if not os.path.isfile(vid):
+            out["errors"].append(f"transcribe {base}: הקובץ לא נמצא")
+            continue
+        ok, err = transcribe_one(vid, dest_dir, on_msg=lambda m, _pct=pct: _p(_pct, m))
+        if ok:
+            out["transcribed"].append(vid)
+        else:
+            out["errors"].append(f"transcribe {base}: {err[-200:]}")
+    _p(100, "התמלול הושלם")
+    return out
+
 
 def _copy_with_progress(src: str, dst: str, cb=None):
     """shutil.copyfile with a progress callback (0..100 of this file)."""
@@ -314,7 +399,7 @@ def run_import(source_dir: str, options: dict, progress=None) -> dict:
     def _p(pct, msg):
         if progress:
             try:
-                progress(round(pct, 1), msg)
+                progress(round(pct, 1) if pct is not None else None, msg)
             except Exception:
                 pass
 
@@ -329,7 +414,8 @@ def run_import(source_dir: str, options: dict, progress=None) -> dict:
     manifest = _load_manifest(backup_root)
 
     summary = {"dest_dir": dest_dir, "copied": [], "merged": [],
-               "transcribed": [], "skipped": 0, "errors": []}
+               "transcribe_targets": [], "transcribed": [], "skipped": 0,
+               "errors": []}
 
     # Only work on clips not already imported.
     pending_sessions = []
@@ -402,26 +488,23 @@ def run_import(source_dir: str, options: dict, progress=None) -> dict:
             outputs_for_transcribe.extend(clips)
     _ = merge_sessions
 
+    # Record what transcription targets (merged sessions + un-merged singles) so
+    # the UI can offer a re-transcribe if the phase below is off or fails.
+    summary["transcribe_targets"] = list(outputs_for_transcribe)
+
     # ── Phase 3: transcribe (85–100%) ────────────────────────────────────────
     if transcribe and outputs_for_transcribe:
-        import subprocess
+        n = len(outputs_for_transcribe)
         for i, vid in enumerate(outputs_for_transcribe):
-            _p(85 + (i / max(1, len(outputs_for_transcribe))) * 15,
-               f"מתמלל: {os.path.basename(vid)}…")
-            try:
-                r = subprocess.run(
-                    ["py", "-3.10", TRANSCRIBE_SCRIPT, vid, "--output-dir", dest_dir],
-                    capture_output=True, text=True, timeout=7200,
-                    creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
-                )
-                if r.returncode == 0:
-                    summary["transcribed"].append(vid)
-                else:
-                    summary["errors"].append(
-                        f"transcribe {os.path.basename(vid)}: "
-                        f"{(r.stderr or r.stdout or '').strip()[-200:]}")
-            except Exception as e:
-                summary["errors"].append(f"transcribe {os.path.basename(vid)}: {e}")
+            cur = 85 + (i / max(1, n)) * 15
+            _p(cur, f"מתמלל: {os.path.basename(vid)}…")
+            ok, err = transcribe_one(vid, dest_dir,
+                                     on_msg=lambda m, _c=cur: _p(_c, m))
+            if ok:
+                summary["transcribed"].append(vid)
+            else:
+                summary["errors"].append(
+                    f"transcribe {os.path.basename(vid)}: {err[-200:]}")
 
     _p(100, "הייבוא הושלם")
     return summary

@@ -126,6 +126,23 @@ def api_osmo_import():
     return jsonify({"ok": True, "id": jid})
 
 
+@app.route("/api/osmo/transcribe", methods=["POST"])
+def api_osmo_transcribe():
+    """(Re)transcribe already-imported files — used when the import's transcription
+    phase was skipped or failed (e.g. a transient model lock). The idempotent
+    import won't re-reach transcription on its own, so this targets files directly."""
+    data = request.get_json(force=True, silent=True) or {}
+    paths = [p for p in (data.get("paths") or []) if isinstance(p, str) and p]
+    if not paths:
+        return jsonify({"ok": False, "error": "לא צוינו קבצים לתמלול"}), 400
+    if not osmo_import.HAS_TRANSCRIBE:
+        return jsonify({"ok": False, "error": "סקריפט התמלול לא נמצא"}), 503
+    dest_dir = data.get("dest_dir") or os.path.dirname(paths[0])
+    jid = jobs.run(lambda update: osmo_import.transcribe_files(
+        paths, dest_dir, progress=lambda pct, msg: update(pct, msg)))
+    return jsonify({"ok": True, "id": jid})
+
+
 @app.route("/api/osmo/config", methods=["GET", "POST"])
 def api_osmo_config():
     if request.method == "POST":

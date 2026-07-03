@@ -27,20 +27,25 @@ and file map live in [CLAUDE.md](CLAUDE.md) — this is only the state + next st
 >   idempotency.
 > - Installer built: `dist\installer\CreatorStudio-Setup-2.0.0.exe`.
 > - Renamed from studio-flow → creator-studio (repo, remote, app, folder, docs).
+> - ✅ **Real Osmo Pocket 4 card verified (2026-07-03):** mounts as a drive letter,
+>   8 clips grouped into sessions correctly, lossless merges exact. `SESSION_MAX_GAP`
+>   left at 5 s.
+> - ✅ **Transcription fixed (2026-07-03):** the first real import failed transcription
+>   two ways — (a) a *transient* `model.bin` file-lock during the heavy copy, and (b) a
+>   *persistent* `cublas64_12.dll cannot be loaded` (missing `nvidia-cuda-runtime-cu12`
+>   **and** `add_nvidia_dll_dirs()` only added dirs; ctranslate2 needs the CUDA DLLs
+>   **preloaded**). Both fixed: installed the CUDA runtime pkg, `transcribe-hebrew.py`
+>   now preloads, plus retry-with-backoff and a re-transcribe button/endpoint. GPU
+>   transcription verified end-to-end on a real clip.
 >
 > **Open items, in priority order:**
-> 1. **Real DJI Osmo Pocket 4 test** (highest value). Plug in the actual camera and
->    confirm: (a) it mounts as a **drive letter** (USB mass-storage), not MTP — if
->    MTP, `detect_camera_drives()` won't see it and we need an MTP path; (b) the
->    real filenames group correctly; tune `SESSION_MAX_GAP` (currently 5 s) in
->    `osmo_import.py` if split clips land in separate sessions or vice-versa.
-> 2. **Install + smoke test the real app**: run the installer, tick autostart,
+> 1. **Install + smoke test the real app**: run the installer, tick autostart,
 >    confirm the window opens, the tray persists on close, and the mic lock is
 >    silent (no overlay). Then uninstall the old "Studio Flow" from Apps.
-> 3. **Optional — DaVinci "create project from file" UI**: the backend
+> 2. **Optional — DaVinci "create project from file" UI**: the backend
 >    (`davinci.create_project`) is ready and wired-capable; only the UI form wasn't
 >    ported from the old app. Add it as a screen if wanted.
-> 4. **Minor**: `GET /favicon.ico` returns 404 (harmless) — add a favicon route or
+> 3. **Minor**: `GET /favicon.ico` returns 404 (harmless) — add a favicon route or
 >    asset if you care.
 >
 > **How to run/build/test:** `run.bat` (dev window) · `py -3.10 -m pytest tests/ -q`
