@@ -48,8 +48,8 @@ class MicMonitor:
     def __init__(self):
         self._stop = threading.Event()
         settings = load_settings()
-        # First-run default: locked at 90% (unchanged behaviour, just silent).
-        self.locked = bool(settings.get("mic_locked", True))
+        # First-run default: unlocked. Lock is opt-in from the app screen.
+        self.locked = bool(settings.get("mic_locked", False))
         self.target_vol = int(settings.get("mic_lock_target", 90))
         if self.locked:
             set_mic_volume(self.target_vol)

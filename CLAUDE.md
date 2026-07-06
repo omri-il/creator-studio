@@ -99,7 +99,8 @@ So it works regardless of the exact P4 filename convention. Threshold is tunable
 - **Transcription engine defaults to the VPS whisper-agent** (`transcribe_backend`
   = `vps`; Omri's preference 2026-07-03). Switch to local GPU in the import screen
   (persisted). See Reuse for the two backends.
-- Mic: first-run default locked at 90% (`mic_locked`/`mic_lock_target` persisted).
+- Mic: first-run default **unlocked** (lock is opt-in from the app screen). When
+  locked, target defaults to 90% (`mic_locked`/`mic_lock_target` persisted).
 
 ## Notes / follow-ups
 - Requires the **DJI in USB mass-storage (drive-letter) mode**, not MTP. Detection
