@@ -28,7 +28,7 @@ from settings_store import get_setting, set_setting
 # Sidecars the camera writes next to each real clip — never transferred.
 SKIP_EXTS = {".lrf", ".srt", ".thm", ".gif"}
 
-DEFAULT_BACKUP_ROOT = r"E:\Video Projects\Osmo Imports"
+DEFAULT_BACKUP_ROOT = r"D:\DJI Pocket Archive"
 MANIFEST_NAME = "imported.json"          # lives in the backup root
 SESSION_MAX_GAP = 5.0                    # seconds between clips → same recording
 
