@@ -41,7 +41,7 @@ polls — the exact `jobs.py` pattern from **video-prep**.
 | `osmo_import.py` | Camera detect, DCIM scan (skip `.LRF`/`.SRT`), **session grouping**, idempotent copy, import orchestration (copy → merge → transcribe). |
 | `mic.py` | `get/set_mic_volume`, headless `MicMonitor` (silent lock loop). |
 | `audio_tools.py` | ffmpeg ebur128 analyze + two-pass loudnorm normalize + YouTube verdict. |
-| `davinci.py` | Resolve launch, project create, dashboard/bot/watch launchers, Tailscale drive map. |
+| `davinci.py` | Resolve launch, project create, dashboard/bot/watch launchers, Tailscale drive map. New projects land in the shared network Resolve Project Library (`Resolve Shared Library`) by default since 2026-07 — see davinci-automation's CLAUDE.md "Database Structure" section (no code change here; it's `new_project.py`'s own default). |
 | `jobs.py` | In-memory job registry + progress (UI polls `GET /api/job/<id>`). |
 | `web/` | `index.html`, `app.css`, `app.js` — RTL "control-room" UI (Rubik/Heebo, amber+teal on near-black). |
 | `tests/test_osmo.py` | Unit tests for the pure grouping/timeline/manifest logic. |
