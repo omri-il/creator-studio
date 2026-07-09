@@ -19,6 +19,7 @@ import ctypes
 import os
 import re
 import shutil
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -408,9 +409,16 @@ def transcribe_files(paths, dest_dir: str, backend: str | None = None,
 
 
 def _copy_with_progress(src: str, dst: str, cb=None):
-    """shutil.copyfile with a progress callback (0..100 of this file)."""
+    """shutil.copyfile-equivalent chunked read/write, reporting percent/speed/ETA
+    via cb(pct, speed_bytes_per_sec, eta_sec) roughly twice a second.
+
+    Deliberately NOT shutil.copyfile's Windows CopyFile2 fast path: CopyFile2 is
+    known to be pathologically slow copying off FAT32/exFAT media (exactly how DJI
+    formats its SD cards) due to extra per-cluster flush/sync behavior — verified
+    on a real Osmo import (0.2 MB/s vs ~4-5 MB/s with a plain buffered loop)."""
     total = os.path.getsize(src) or 1
     done = 0
+    last_done, last_t = 0, time.monotonic()
     with open(src, "rb") as fsrc, open(dst, "wb") as fdst:
         while True:
             chunk = fsrc.read(4 * 1024 * 1024)
@@ -418,8 +426,15 @@ def _copy_with_progress(src: str, dst: str, cb=None):
                 break
             fdst.write(chunk)
             done += len(chunk)
-            if cb:
-                cb(min(100.0, done / total * 100))
+            now = time.monotonic()
+            dt = now - last_t
+            if cb and dt >= 0.5:
+                speed = (done - last_done) / dt
+                eta = max(0, total - done) / speed if speed > 0 else None
+                cb(min(100.0, done / total * 100), speed, eta)
+                last_done, last_t = done, now
+    if cb:
+        cb(100.0, 0, None)
     shutil.copystat(src, dst, follow_symlinks=True)
 
 
@@ -477,9 +492,16 @@ def run_import(source_dir: str, options: dict, progress=None) -> dict:
                 dst = os.path.join(dest_dir, f"{stem}_{int(c.get('size',0))}{ext}")
             base = copied_index / total_new * 60.0
 
-            def _cb(fp, _base=base):
+            def _cb(fp, speed=None, eta=None, _base=base):
+                extra = ""
+                if speed:
+                    mbps = speed / (1024 * 1024)
+                    extra = f" · {mbps:.1f} MB/s"
+                    if eta:
+                        m, s2 = divmod(int(eta), 60)
+                        extra += f" · נותרו {m}:{s2:02d}"
                 _p(_base + (fp / 100.0) * (60.0 / total_new),
-                   f"מעתיק {c['name']}…")
+                   f"מעתיק {c['name']}…{extra}")
             try:
                 _copy_with_progress(c["path"], dst, _cb)
                 s["dest_clips"].append(dst)
