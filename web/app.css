@@ -232,3 +232,22 @@ main{max-width:980px;margin:0 auto;padding:34px 26px 80px;position:relative;z-in
   .statusstrip .stat.cam span:last-child{display:none}
   main{padding:24px 16px 70px}
 }
+
+/* ── VSL publishing ─────────────────────────────────────────────────────── */
+/* `.errs` was only ever styled inside `.done`; the size warning is a standalone
+   one inside a panel, so it gets its own rule rather than a nested override. */
+#view-vsl .errs{color:var(--amber);background:rgba(255,184,77,.08);
+  border:1px solid rgba(255,184,77,.28);border-radius:var(--r-sm);
+  padding:11px 13px;margin-top:13px;font-size:13px;line-height:1.55}
+/* The row rule only covers input[type=text]; the event picker is a <select>
+   and the settings inputs sit outside a .row. */
+#view-vsl select,
+#view-vsl .panel > input[type=text]{background:var(--bg2);border:1px solid var(--line2);
+  border-radius:10px;padding:11px 13px;color:var(--text);
+  font-family:"JetBrains Mono";font-size:13px}
+#view-vsl select{flex:1;min-width:200px}
+#view-vsl .panel > input[type=text]{width:100%;margin-bottom:14px}
+#view-vsl select:focus,#view-vsl input:focus{outline:none;border-color:var(--amber)}
+#vslSettings summary{cursor:pointer;margin-bottom:0}
+#vslSettings[open] summary{margin-bottom:16px}
+#vslResultUrl{flex:1;min-width:220px}

@@ -82,6 +82,15 @@
           </div>
         </div>
 
+        <div class="tile reveal" data-tool="vsl" id="tileVsl">
+          <div class="tile-ico">🎯</div>
+          <h3>פרסום VSL</h3>
+          <p>העלאת סרטון המכירה ל-Wistia והצבתו בדף ההרשמה של האירוע.</p>
+          <div class="tile-actions">
+            <button class="btn" id="openVslBtn">פתח פרסום</button>
+          </div>
+        </div>
+
         <div class="tile reveal" data-tool="audio">
           <div class="tile-ico">📊</div>
           <h3>בדיקת אודיו ליוטיוב</h3>
@@ -141,6 +150,62 @@
       </div>
 
       <div id="donePanel" class="hidden"></div>
+    </section>
+
+    <!-- ── VSL PUBLISH ───────────────────────────────────────────────────── -->
+    <section class="view hidden" id="view-vsl">
+      <button class="back" id="backHomeVsl">→ חזרה לשולחן</button>
+      <h1 class="view-title">פרסום סרטון מכירה</h1>
+
+      <div class="banner hidden" id="vslConfigBanner">
+        <span class="banner-ico">🔑</span>
+        <div class="banner-body" id="vslConfigText"></div>
+      </div>
+
+      <div class="panel">
+        <label class="field-label">קובץ הווידאו</label>
+        <div class="row">
+          <input type="text" id="vslPath" class="ltr" placeholder="E:\Video Projects\...sl.mp4">
+          <button class="btn ghost" id="vslPickBtn">בחר…</button>
+          <button class="btn ghost" id="vslLatestBtn" title="הקובץ החדש ביותר בתיקיית הייצוא">האחרון</button>
+        </div>
+        <div class="destline" id="vslFileInfo">—</div>
+        <div class="errs hidden" id="vslWarn"></div>
+      </div>
+
+      <div class="panel">
+        <label class="field-label">אירוע היעד</label>
+        <div class="row">
+          <select id="vslEvent" class="ltr"><option value="">— רק להעלות, בלי לשייך —</option></select>
+          <button class="btn ghost" id="vslReloadEventsBtn">רענן</button>
+        </div>
+        <div class="destline" id="vslEventNote"></div>
+        <button class="btn big" id="vslUploadBtn" disabled>העלה ופרסם</button>
+      </div>
+
+      <div class="panel job hidden" id="vslJobPanel">
+        <div class="job-head"><span id="vslJobMsg">מתחיל…</span><span class="mono" id="vslJobPct">0%</span></div>
+        <div class="progress"><i id="vslJobBar"></i></div>
+      </div>
+
+      <div id="vslDonePanel" class="hidden"></div>
+
+      <details class="panel" id="vslSettings">
+        <summary class="field-label">הגדרות</summary>
+        <label class="field-label">תיקיית ייצוא (ל"האחרון")</label>
+        <div class="row">
+          <input type="text" id="vslExportsDir" class="ltr" placeholder="E:\Video Projects\Exports">
+          <button class="btn ghost" id="vslPickExportsBtn">בחר…</button>
+        </div>
+        <label class="field-label">כתובת Event-Engine</label>
+        <input type="text" id="vslEeUrl" class="ltr" placeholder="https://events.omri-iram.co.il">
+        <label class="field-label">Wistia — מזהה פרויקט (רשות)</label>
+        <input type="text" id="vslProjectId" class="ltr" placeholder="">
+        <label class="field-label">Wistia — סאב-דומיין (רשות)</label>
+        <input type="text" id="vslSubdomain" class="ltr" placeholder="omri">
+        <div class="row"><button class="btn ghost" id="vslSaveCfgBtn">שמור הגדרות</button></div>
+        <div class="destline">המפתחות (WISTIA_API_TOKEN, EVENT_ENGINE_TOKEN) נשמרים רק בקובץ <span class="mono">.env</span> — לא כאן.</div>
+      </details>
     </section>
   </main>
 

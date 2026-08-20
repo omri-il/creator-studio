@@ -27,6 +27,7 @@ a = Analysis(
         # our backend modules (some imported lazily inside functions)
         'settings_store', 'mediatools', 'osmo_import', 'jobs',
         'mic', 'audio_tools', 'davinci', 'server',
+        'wistia', 'eventengine', 'vsl_publish',
         # web + gui + audio stack
         'flask', 'werkzeug', 'jinja2', 'clr',
         'pycaw', 'pycaw.pycaw', 'comtypes', 'comtypes.client',

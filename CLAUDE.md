@@ -18,6 +18,10 @@ screen-first successor to the old tray-only "Studio Flow" (renamed in-app to
   optionally **transcribes Hebrew**. Never re-copies an already-imported clip.
 - **Silent mic lock:** keeps the mic pinned at a target % in the background — no
   more naggy floating overlay. Status shows on the home screen.
+- **VSL publishing:** after Resolve renders a sales video, one action puts it on
+  **Wistia** and points an Event-Engine event's sign-up page at it — no browser
+  round-trip through the Wistia dashboard and the events admin. Same pipeline from
+  the CLI (`publish_vsl.py`) and from the app's 🎯 tile.
 - **Tiles for the rest:** launch DaVinci Resolve + its Control Center dashboard,
   Tailscale E: drive mapping, YouTube loudness check + normalize.
 
@@ -44,7 +48,12 @@ polls — the exact `jobs.py` pattern from **video-prep**.
 | `davinci.py` | Resolve launch, project create, dashboard/bot/watch launchers, Tailscale drive map. New projects land in the shared network Resolve Project Library (`Resolve Shared Library`) by default since 2026-07 — see davinci-automation's CLAUDE.md "Database Structure" section (no code change here; it's `new_project.py`'s own default). |
 | `jobs.py` | In-memory job registry + progress (UI polls `GET /api/job/<id>`). |
 | `web/` | `index.html`, `app.css`, `app.js` — RTL "control-room" UI (Rubik/Heebo, amber+teal on near-black). |
+| `wistia.py` | Wistia Upload API client. **Streams** the file with a real `Content-Length` (`_MultipartBody`) — a Resolve master does not fit in RAM, which is the whole reason this is not a `requests.post(files=…)` one-liner. `media_url()` is the canonical link because it is guaranteed to match Event-Engine's `vsl.py` regex, with no account-subdomain guessing. |
+| `eventengine.py` | Client for Event-Engine's token-guarded `/api/media/*`. Errors are returned with what to fix, never raw HTTP codes. |
+| `vsl_publish.py` | The pipeline both surfaces share: config, `latest_video`, the size warning, and `publish()`. One home so the CLI and the button cannot drift. |
+| `publish_vsl.py` | The CLI. `--latest`, `--pick`, `--event`, `--dry-run`; copies the link to the clipboard. |
 | `tests/test_osmo.py` | Unit tests for the pure grouping/timeline/manifest logic. |
+| `tests/test_wistia.py` · `test_publish_vsl.py` · `test_vsl_routes.py` | The VSL pipeline, network stubbed throughout. |
 
 ## How session grouping works (the "smart merge")
 DJI splits one long recording into ~4 GB chunks that are **contiguous in time**;
@@ -102,12 +111,67 @@ So it works regardless of the exact P4 filename convention. Threshold is tunable
 - Mic: first-run default **unlocked** (lock is opt-in from the app screen). When
   locked, target defaults to 90% (`mic_locked`/`mic_lock_target` persisted).
 
+## VSL publishing (Wistia → Event-Engine)
+
+Render in Resolve, then either:
+
+```
+py -3.10 publish_vsl.py "E:\Video Projects\...sl.mp4" --pick
+py -3.10 publish_vsl.py --latest --event 18
+```
+
+or open the **🎯 פרסום VSL** tile, pick the file, pick the event, Upload.
+
+**Why Wistia and not YouTube:** a YouTube embed can no longer be stripped of its
+chrome (`showinfo` removed 2018, `modestbranding` deprecated 2023), so it always
+offers a "Watch on YouTube" exit off the sales page. Event-Engine's `vsl.py`
+already parses Wistia links, so nothing was needed on that side but a way in.
+
+**Config.** Copy `.env.example` → `.env`. Secrets live there and ONLY there — `WISTIA_API_TOKEN`,
+`EVENT_ENGINE_TOKEN` (must equal `MEDIA_API_TOKEN` in that instance's `.env`).
+Preferences in `settings.json`: `wistia_project_id`, `wistia_subdomain`,
+`event_engine_url`, `vsl_exports_dir`. `settings.json` is **not** gitignored,
+which is exactly why the split exists. The panel reports whether each token is
+present and never its value.
+
+**Three things that are load-bearing:**
+- 🚨 **The upload is streamed, never buffered.** `wistia._MultipartBody` yields
+  the preamble, the file in 1 MiB chunks, then the epilogue, and computes its own
+  exact `Content-Length`. Swap in `requests.post(files=…)` and a 10 GB master
+  takes the machine down.
+- **A failed event update is a PARTIAL success, not a failure.** The video is on
+  Wistia either way, so `publish()` returns `event_error` alongside the link
+  rather than raising — otherwise the user re-uploads a file that already exists.
+  Both surfaces show the link with a "paste it in by hand" note.
+- **No compression, on purpose.** A big file is *warned about* (size + estimated
+  minutes + "export a delivery file") and then uploaded anyway.
+  [video-prep](../video-prep) is the documented home for compression; a second
+  compressor here would duplicate the feature that repo exists for.
+
+**Stdlib only** (`urllib`, no `requests`/`python-dotenv`): this app is frozen with
+PyInstaller, so a new dependency means touching `mic_tracker.spec` and re-testing
+the build — and urllib is what gives the streaming control above.
+
 ## Notes / follow-ups
 - Requires the **DJI in USB mass-storage (drive-letter) mode**, not MTP. Detection
   excludes REMOTE drives so the Tailscale `E:` mapping is never mistaken for a camera.
 - ✅ **Verified against a real Osmo Pocket 4 card (2026-07-03):** filenames
   (`DJI_<ts>_NNNN_D.MP4`) group into sessions correctly and the lossless merge is
   exact. `SESSION_MAX_GAP` (5 s) left as-is — no adjustment needed.
+- ✅ **Verified against real Wistia (2026-08-20).** A real 6s clip uploaded
+  through `wistia.upload` (18 progress callbacks over the streamed body),
+  processed to `ready` in seconds, and its `media_url` parsed cleanly through
+  Event-Engine's own `vsl.py` — then a real `/register/<slug>` page rendered the
+  player at 16:9 with a live browsing context, and the embed URL serves 200
+  publicly. **API access is NOT gated on this account** (the open question when
+  this was built): `GET /v1/account.json` and `/v1/projects.json` both answer.
+  - Account is **`omri-iram.wistia.com`**, so `wistia_subdomain` = `omri-iram`
+    if the prettier `…/medias/<id>` link is ever wanted. Left unset by default:
+    `fast.wistia.net` needs no subdomain to be right, and both parse.
+  - Existing projects: `Hello's first folder`, `Sample live event`,
+    `AI Challange` (10899727) — set `wistia_project_id` to file uploads there.
+  - ⚠️ One leftover asset: **`ppryk9q0ie` — "[TEST] Creator Studio pipeline
+    check — safe to delete"**. Delete it whenever.
 - **Transcription is resilient now (2026-07-03):** the import's transcribe phase
   retries transient failures with backoff (`transcribe_one`), and because the
   idempotent import won't re-reach transcription for already-copied clips, the done

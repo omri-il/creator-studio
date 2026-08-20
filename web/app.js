@@ -31,16 +31,22 @@ function setTxBackend(b, save) {
 const txLabel = (b) => (b === "local" ? " · 💻 מקומי" : b === "vps" ? " · ☁️ שרת" : "");
 
 /* ── views ──────────────────────────────────────────────────────────────── */
-function showHome() {
-  $("#view-home").classList.remove("hidden");
-  $("#view-import").classList.add("hidden");
+const VIEWS = ["view-home", "view-import", "view-vsl"];
+function setView(id) {
+  VIEWS.forEach((v) => $("#" + v).classList.toggle("hidden", v !== id));
 }
+function showHome() { setView("view-home"); }
 function showImport() {
-  $("#view-home").classList.add("hidden");
-  $("#view-import").classList.remove("hidden");
+  setView("view-import");
   $("#toast").classList.add("hidden");
   detectDrives();
   loadDest();
+}
+function showVsl() {
+  setView("view-vsl");
+  $("#toast").classList.add("hidden");
+  loadVslConfig();
+  loadVslEvents();
 }
 
 /* ── mic ────────────────────────────────────────────────────────────────── */
@@ -331,6 +337,169 @@ function showAudio(a) {
   };
 }
 
+/* ── VSL publishing (Wistia → Event-Engine) ─────────────────────────────── */
+let vslFile = null;
+
+async function loadVslConfig() {
+  let c;
+  try { c = await api("/api/wistia/config"); } catch (e) { return; }
+  $("#vslExportsDir").value = c.exports_dir || "";
+  $("#vslEeUrl").value = c.event_engine_url || "";
+  $("#vslProjectId").value = c.wistia_project_id || "";
+  $("#vslSubdomain").value = c.wistia_subdomain || "";
+  /* A missing token is the one setup step the panel cannot do for you, so it
+     says so up front rather than failing at upload time. */
+  const missing = [];
+  if (!c.has_wistia_token) missing.push("WISTIA_API_TOKEN");
+  if (!c.has_event_engine_token) missing.push("EVENT_ENGINE_TOKEN");
+  const banner = $("#vslConfigBanner");
+  if (missing.length) {
+    $("#vslConfigText").innerHTML =
+      'חסר בקובץ <span class="mono">.env</span>: <span class="mono">' +
+      missing.join(", ") + "</span>";
+    banner.classList.remove("hidden");
+    $("#vslSettings").open = true;
+  } else {
+    banner.classList.add("hidden");
+  }
+  setVslReady();
+}
+
+async function saveVslConfig() {
+  await post("/api/wistia/config", {
+    exports_dir: $("#vslExportsDir").value.trim(),
+    event_engine_url: $("#vslEeUrl").value.trim(),
+    wistia_project_id: $("#vslProjectId").value.trim(),
+    wistia_subdomain: $("#vslSubdomain").value.trim(),
+  });
+  loadVslConfig();
+  loadVslEvents();
+}
+
+async function loadVslEvents() {
+  const sel = $("#vslEvent");
+  const note = $("#vslEventNote");
+  let r;
+  try { r = await api("/api/wistia/events"); } catch (e) { r = { ok: false, error: "" }; }
+  sel.innerHTML = '<option value="">— רק להעלות, בלי לשייך —</option>';
+  if (!r.ok) {
+    /* Not fatal: the upload still works and the link can be pasted by hand. */
+    note.textContent = "לא ניתן לטעון אירועים: " + (r.error || "");
+    return;
+  }
+  for (const ev of r.events || []) {
+    const o = document.createElement("option");
+    o.value = ev.id;
+    o.textContent = ev.name + " · " +
+      (ev.starts_at || "").slice(0, 16).replace("T", " ") +
+      (ev.vsl_url ? "  (יש כבר סרטון)" : "");
+    sel.appendChild(o);
+  }
+  note.textContent = (r.events || []).length ? "" : "אין אירועים פעילים.";
+}
+
+function renderVslFile(info) {
+  vslFile = info;
+  $("#vslPath").value = info.path;
+  $("#vslFileInfo").innerHTML =
+    info.name + ' · <span class="mono">' + info.size_human + "</span> · כ-" +
+    info.minutes + " דקות העלאה";
+  const warn = $("#vslWarn");
+  warn.textContent = info.warn_text || "";
+  warn.classList.toggle("hidden", !info.warn);
+  setVslReady();
+}
+
+function setVslReady() {
+  $("#vslUploadBtn").disabled = !vslFile;
+}
+
+async function inspectVslPath(path) {
+  if (!path) return;
+  const r = await post("/api/wistia/inspect", { path });
+  if (!r.ok) {
+    vslFile = null;
+    setVslReady();
+    $("#vslFileInfo").textContent = r.error || "קובץ לא קיים";
+    return;
+  }
+  renderVslFile(r);
+}
+
+async function pickVslFile() {
+  const p = await post("/api/pick", { kind: "file" });
+  if (p && p.ok && p.path) inspectVslPath(p.path);
+}
+
+async function useLatestVideo() {
+  const r = await post("/api/wistia/latest", { folder: $("#vslExportsDir").value.trim() });
+  if (!r.ok) { alert(r.error || "לא נמצא קובץ"); return; }
+  renderVslFile(r);
+}
+
+async function startVslUpload() {
+  if (!vslFile) return;
+  const eventId = $("#vslEvent").value || null;
+  $("#vslUploadBtn").disabled = true;
+  $("#vslJobPanel").classList.remove("hidden");
+  $("#vslDonePanel").classList.add("hidden");
+  const r = await post("/api/wistia/upload", { path: vslFile.path, event_id: eventId });
+  if (!r.ok) {
+    alert(r.error || "ההעלאה נכשלה להתחיל");
+    $("#vslJobPanel").classList.add("hidden");
+    setVslReady();
+    return;
+  }
+  pollJob(r.id, (j) => {
+    $("#vslJobBar").style.width = (j.progress || 0) + "%";
+    $("#vslJobPct").textContent = Math.round(j.progress || 0) + "%";
+    $("#vslJobMsg").textContent = j.message || "";
+  }, (j) => renderVslDone(j.result), (j) => {
+    $("#vslJobPanel").classList.add("hidden");
+    const box = $("#vslDonePanel");
+    box.innerHTML = '<div class="done"><h2>⚠️ ההעלאה נכשלה</h2><div class="errs">' +
+      (j.message || "שגיאה") +
+      '</div><div class="done-actions"><button class="btn ghost" onclick="location.reload()">נסה שוב</button></div></div>';
+    box.classList.remove("hidden");
+    setVslReady();
+  });
+}
+
+function renderVslDone(r) {
+  $("#vslJobPanel").classList.add("hidden");
+  const box = $("#vslDonePanel");
+  if (!r) { box.classList.remove("hidden"); return; }
+  const url = r.video_url;
+  /* An upload that worked followed by a failed event update is a PARTIAL
+     success — the video is on Wistia either way, so the link is always shown
+     rather than the whole thing reading as a failure. */
+  let html = '<div class="done"><h2>' + (r.event_error ? "⚠️" : "✅") +
+    ' הועלה ל-Wistia</h2>' +
+    '<div class="row"><input type="text" class="ltr" id="vslResultUrl" readonly value="' +
+    url + '"><button class="btn" id="vslCopyBtn">העתק</button></div>';
+  if (r.event_error) {
+    html += '<div class="errs">הסרטון עלה, אבל האירוע לא עודכן: ' + r.event_error +
+      "<br>הדביקו את הקישור שלמעלה בשדה הווידאו של האירוע.</div>";
+  } else if (r.event && r.event.public_url) {
+    html += "<ul><li>דף ההרשמה כבר מציג את הסרטון.</li></ul>";
+  }
+  html += '<div class="done-actions">' +
+    (r.event && r.event.public_url
+      ? '<button class="btn" id="vslOpenPageBtn">🌐 פתח את דף ההרשמה</button>' : "") +
+    '<button class="btn ghost" onclick="location.reload()">פרסום נוסף</button></div></div>';
+  box.innerHTML = html;
+  box.classList.remove("hidden");
+  $("#vslCopyBtn").onclick = () => {
+    const el = $("#vslResultUrl");
+    el.select();
+    if (navigator.clipboard) navigator.clipboard.writeText(url);
+    else document.execCommand("copy");
+    $("#vslCopyBtn").textContent = "הועתק ✓";
+  };
+  const open = $("#vslOpenPageBtn");
+  if (open) open.onclick = () => window.open(r.event.public_url, "_blank");
+}
+
 /* ── wiring ─────────────────────────────────────────────────────────────── */
 async function init() {
   try {
@@ -347,6 +516,18 @@ async function init() {
   } catch (e) {}
 
   $("#heroOsmo").onclick = showImport;
+  $("#openVslBtn").onclick = showVsl;
+  $("#backHomeVsl").onclick = showHome;
+  $("#vslPickBtn").onclick = pickVslFile;
+  $("#vslLatestBtn").onclick = useLatestVideo;
+  $("#vslReloadEventsBtn").onclick = loadVslEvents;
+  $("#vslUploadBtn").onclick = startVslUpload;
+  $("#vslSaveCfgBtn").onclick = saveVslConfig;
+  $("#vslPath").onchange = (e) => inspectVslPath(e.target.value.trim());
+  $("#vslPickExportsBtn").onclick = async () => {
+    const p = await post("/api/pick", { kind: "folder" });
+    if (p && p.ok && p.path) $("#vslExportsDir").value = p.path;
+  };
   $("#brandHome").onclick = showHome;
   $("#backHome").onclick = showHome;
   $("#micStat").onclick = toggleMicLock;

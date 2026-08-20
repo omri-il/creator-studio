@@ -40,6 +40,10 @@ else:
 
 SETTINGS_FILE = os.path.join(_USER_DIR, "settings.json")
 LOG_FILE = os.path.join(_USER_DIR, "mic_log.txt")
+# Secrets live here and ONLY here — .env is gitignored, settings.json is not.
+# Sits beside settings.json so it lands in LOCALAPPDATA when frozen and in the
+# repo root in dev, exactly like every other piece of user state.
+ENV_FILE = os.path.join(_USER_DIR, ".env")
 
 # Where the web UI assets live (bundled under _internal/web when frozen).
 WEB_DIR = os.path.join(_RES_DIR, "web")
@@ -94,3 +98,31 @@ def set_setting(key: str, value) -> None:
     s = load_settings()
     s[key] = value
     save_settings(s)
+
+
+# -- Secrets (.env, gitignored) -----------------------------------------------
+# A ~10-line parser rather than python-dotenv: this app is frozen with
+# PyInstaller and adding a dependency means touching mic_tracker.spec and
+# re-testing the build. KEY=value, `#` comments, optional surrounding quotes.
+def load_env(path: str | None = None) -> dict:
+    out: dict[str, str] = {}
+    try:
+        with open(path or ENV_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                value = value.strip()
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                    value = value[1:-1]
+                out[key.strip()] = value
+    except OSError:
+        pass
+    return out
+
+
+def get_secret(key: str, default: str = "") -> str:
+    """A real environment variable wins over .env, so a shell can override
+    without editing a file. Never logged, never returned to the browser."""
+    return os.environ.get(key) or load_env().get(key, default) or default

@@ -15,9 +15,12 @@ from flask import Flask, jsonify, request, send_from_directory
 
 import audio_tools
 import davinci
+import eventengine
 import jobs
 import mediatools
 import osmo_import
+import settings_store
+import vsl_publish
 from settings_store import APP_NAME, APP_VERSION, WEB_DIR
 
 app = Flask(__name__, static_folder=None)
@@ -225,6 +228,75 @@ def api_audio_normalize():
         if res is None:
             raise RuntimeError("הנרמול נכשל")
         return res
+
+    return jsonify({"ok": True, "id": jobs.run(worker)})
+
+
+# ── VSL publishing (Wistia → Event-Engine) ────────────────────────────────────
+@app.route("/api/wistia/config", methods=["GET", "POST"])
+def api_wistia_config():
+    """Preferences only. The two tokens live in .env and are never written
+    here and never sent to the browser — `public_config()` reports only
+    whether each one is present."""
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        for key, setting in (("wistia_project_id", "wistia_project_id"),
+                             ("wistia_subdomain", "wistia_subdomain"),
+                             ("event_engine_url", "event_engine_url"),
+                             ("exports_dir", "vsl_exports_dir")):
+            if key in data:
+                settings_store.set_setting(setting, (data.get(key) or "").strip())
+    return jsonify({"ok": True, **vsl_publish.public_config()})
+
+
+@app.route("/api/wistia/events")
+def api_wistia_events():
+    """Proxied so the browser never holds the Event-Engine token."""
+    cfg = vsl_publish.config()
+    try:
+        events = eventengine.list_events(cfg["event_engine_url"],
+                                         cfg["event_engine_token"])
+    except eventengine.EventEngineError as e:
+        return jsonify({"ok": False, "error": str(e)}), 502
+    return jsonify({"ok": True, "events": events})
+
+
+@app.route("/api/wistia/inspect", methods=["POST"])
+def api_wistia_inspect():
+    """Size + upload estimate + the too-big warning, before committing."""
+    data = request.get_json(force=True, silent=True) or {}
+    path = data.get("path")
+    if not path or not os.path.isfile(path):
+        return jsonify({"ok": False, "error": "קובץ לא קיים"}), 400
+    return jsonify({"ok": True, **vsl_publish.inspect(path)})
+
+
+@app.route("/api/wistia/latest", methods=["POST"])
+def api_wistia_latest():
+    data = request.get_json(force=True, silent=True) or {}
+    folder = data.get("folder") or vsl_publish.config()["exports_dir"]
+    path = vsl_publish.latest_video(folder)
+    if not path:
+        return jsonify({"ok": False, "error": "לא נמצאו קבצי וידאו בתיקייה"}), 404
+    return jsonify({"ok": True, **vsl_publish.inspect(path)})
+
+
+@app.route("/api/wistia/upload", methods=["POST"])
+def api_wistia_upload():
+    data = request.get_json(force=True, silent=True) or {}
+    path = data.get("path")
+    if not path or not os.path.isfile(path):
+        return jsonify({"ok": False, "error": "קובץ לא קיים"}), 400
+    cfg = vsl_publish.config()
+    if not cfg["wistia_token"]:
+        return jsonify({"ok": False,
+                        "error": "אין WISTIA_API_TOKEN בקובץ .env"}), 503
+    event_id = data.get("event_id") or None
+
+    def worker(update):
+        return vsl_publish.publish(
+            path, event_id=event_id, name=data.get("name") or None,
+            progress=lambda pct, msg: update(pct, msg), cfg=cfg)
 
     return jsonify({"ok": True, "id": jobs.run(worker)})
 
