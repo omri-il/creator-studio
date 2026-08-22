@@ -13,7 +13,6 @@ import subprocess
 
 from flask import Flask, jsonify, request, send_from_directory
 
-import audio_tools
 import davinci
 import eventengine
 import jobs
@@ -194,42 +193,16 @@ def api_davinci_categories():
     return jsonify({"categories": davinci.CATEGORIES, "base_dir": davinci.get_base_dir()})
 
 
-@app.route("/api/audio/analyze", methods=["POST"])
-def api_audio_analyze():
-    data = request.get_json(force=True, silent=True) or {}
-    path = data.get("path")
-    if not path or not os.path.isfile(path):
-        return jsonify({"ok": False, "error": "קובץ לא קיים"}), 400
+@app.route("/api/audio/open", methods=["POST"])
+def api_audio_open():
+    """Hand the loudness work to video-prep.
 
-    def worker(update):
-        res = audio_tools.analyze_audio_file(path, progress_cb=lambda p, t: update(p, t))
-        if res is None:
-            raise RuntimeError("הניתוח נכשל — בדוק ש-ffmpeg זמין והקובץ קריא")
-        verdict, color, obs, rec = audio_tools.youtube_verdict(
-            res["integrated_lufs"], res["true_peak_dbfs"])
-        return {**res, "verdict": verdict, "color": color,
-                "observations": obs, "recommendation": rec, "path": path}
-
-    return jsonify({"ok": True, "id": jobs.run(worker)})
-
-
-@app.route("/api/audio/normalize", methods=["POST"])
-def api_audio_normalize():
-    data = request.get_json(force=True, silent=True) or {}
-    path = data.get("path")
-    if not path or not os.path.isfile(path):
-        return jsonify({"ok": False, "error": "קובץ לא קיים"}), 400
-    stem, ext = os.path.splitext(path)
-    out = f"{stem}_normalized{ext}"
-
-    def worker(update):
-        res = audio_tools.normalize_audio_file(
-            path, out, progress_cb=lambda stage, t: update(None, t))
-        if res is None:
-            raise RuntimeError("הנרמול נכשל")
-        return res
-
-    return jsonify({"ok": True, "id": jobs.run(worker)})
+    This used to be two routes over a local `audio_tools.py` that did a
+    level-only two-pass loudnorm. video-prep's נרמול אודיו tab does that and
+    more (voice chain, optional denoise, before/after preview), so keeping a
+    second implementation here would have meant two things to fix every time.
+    """
+    return jsonify(davinci.open_video_prep())
 
 
 # ── VSL publishing (Wistia → Event-Engine) ────────────────────────────────────

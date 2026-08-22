@@ -23,7 +23,28 @@ screen-first successor to the old tray-only "Studio Flow" (renamed in-app to
   round-trip through the Wistia dashboard and the events admin. Same pipeline from
   the CLI (`publish_vsl.py`) and from the app's 🎯 tile.
 - **Tiles for the rest:** launch DaVinci Resolve + its Control Center dashboard,
-  Tailscale E: drive mapping, YouTube loudness check + normalize.
+  Tailscale E: drive mapping, and audio normalization — which **hands off to
+  video-prep** rather than doing it here (see below).
+
+## Audio normalization lives in video-prep, not here (2026-08-22)
+
+The 🔊 tile's `פתח נרמול אודיו` button calls `POST /api/audio/open` →
+`davinci.open_video_prep()`, which starts video-prep if it is down and returns
+`http://127.0.0.1:5005/#normalize` for the browser to open.
+
+**`audio_tools.py` was deleted, along with `/api/audio/analyze` and
+`/api/audio/normalize`.** It did a correct but level-only two-pass loudnorm behind
+a file-picker click, with no way to hear the result first. video-prep's
+`נרמול אודיו` tab does that and more — a voice chain (highpass + compressor, the
+ffmpeg counterpart of Fairlight Dynamics + Limiter), optional denoise, and a
+level-matched before/after preview. Keeping a second copy here would have meant
+two implementations to fix every time one of loudnorm's traps bit (and there are
+several — they're documented in video-prep's CLAUDE.md). The proven ebur128 parser
+and `youtube_verdict` were **ported**, not rewritten, into `video-prep/loudness.py`.
+
+If the tile ever reports it can't open video-prep, check that
+`~/Projects/video-prep/serve.bat` exists (`davinci.HAS_VIDEOPREP`) — video-prep also
+autostarts on logon, so normally it is already up and the tile just opens a tab.
 
 ## Architecture
 A native window (**pywebview + WebView2**) whose UI is an HTML/CSS/JS app served by
@@ -44,7 +65,6 @@ polls — the exact `jobs.py` pattern from **video-prep**.
 | `mediatools.py` | `probe` (+ `creation_time`), recursive `find_videos`, lossless `join` (concat demuxer + `-c copy`) + progress. Ported from video-prep `fftools.py`. |
 | `osmo_import.py` | Camera detect, DCIM scan (skip `.LRF`/`.SRT`), **session grouping**, idempotent copy, import orchestration (copy → merge → transcribe). |
 | `mic.py` | `get/set_mic_volume`, headless `MicMonitor` (silent lock loop). |
-| `audio_tools.py` | ffmpeg ebur128 analyze + two-pass loudnorm normalize + YouTube verdict. |
 | `davinci.py` | Resolve launch, project create, dashboard/bot/watch launchers, Tailscale drive map. New projects land in the shared network Resolve Project Library (`Resolve Shared Library`) by default since 2026-07 — see davinci-automation's CLAUDE.md "Database Structure" section (no code change here; it's `new_project.py`'s own default). |
 | `jobs.py` | In-memory job registry + progress (UI polls `GET /api/job/<id>`). |
 | `web/` | `index.html`, `app.css`, `app.js` — RTL "control-room" UI (Rubik/Heebo, amber+teal on near-black). |

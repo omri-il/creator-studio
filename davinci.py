@@ -24,6 +24,15 @@ DASHBOARD_URL = "http://127.0.0.1:5007/"
 HAS_DASHBOARD = os.path.isfile(DASHBOARD_RUNBAT)
 _CONTROL_DIR = os.path.dirname(DASHBOARD_RUNBAT)
 BOT_BAT = os.path.join(_CONTROL_DIR, "bot.bat")
+
+# video-prep owns loudness normalization now (its 🔊 נרמול אודיו tab). Creator
+# Studio used to carry its own weaker copy in audio_tools.py — level-only, no
+# preview, no denoise — which was deleted rather than kept in sync.
+VIDEOPREP_SERVEBAT = os.path.join(
+    os.path.expanduser("~"), "Projects", "video-prep", "serve.bat")
+VIDEOPREP_URL = "http://127.0.0.1:5005/#normalize"
+HAS_VIDEOPREP = os.path.isfile(VIDEOPREP_SERVEBAT)
+_VIDEOPREP_DIR = os.path.dirname(VIDEOPREP_SERVEBAT)
 WATCH_BAT = os.path.join(_CONTROL_DIR, "watch.bat")
 
 EXE_CANDIDATES = [
@@ -104,6 +113,31 @@ def open_dashboard() -> dict:
                 break
             time.sleep(0.5)
     return {"ok": True, "url": DASHBOARD_URL}
+
+
+def open_video_prep() -> dict:
+    """Start video-prep if it isn't already up, then return its normalize tab.
+
+    Same shape as `open_dashboard` — it only ever hands back a URL; the browser
+    does the navigating.
+    """
+    import urllib.request
+
+    def _up():
+        try:
+            urllib.request.urlopen("http://127.0.0.1:5005/", timeout=1)
+            return True
+        except Exception:
+            return False
+
+    if not _up() and os.path.isfile(VIDEOPREP_SERVEBAT):
+        subprocess.Popen([VIDEOPREP_SERVEBAT], cwd=_VIDEOPREP_DIR,
+                         creationflags=subprocess.CREATE_NEW_CONSOLE)
+        for _ in range(30):          # serve.bat pip-installs on a cold start
+            if _up():
+                break
+            time.sleep(0.5)
+    return {"ok": True, "url": VIDEOPREP_URL, "running": _up()}
 
 
 def start_bot() -> dict:

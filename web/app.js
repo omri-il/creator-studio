@@ -285,7 +285,7 @@ async function toolAction(act) {
   if (act === "davinci-launch") { const r = await post("/api/davinci/launch"); flash(r.ok ? "Resolve מופעל" : r.error); }
   else if (act === "davinci-dashboard") { await post("/api/davinci/dashboard"); flash("פותח לוח בקרה…"); }
   else if (act === "map-drive") { const r = await post("/api/davinci/map-drive"); flash(r.ok ? "כונן מופה" : (r.error || r.output || "נכשל")); }
-  else if (act === "audio-pick") { audioPick(); }
+  else if (act === "audio-open") { audioOpen(); }
 }
 function flash(msg) {
   const t = $("#toast");
@@ -300,41 +300,16 @@ function flash(msg) {
     t.querySelector(".toast-ico").textContent = "📷"; }, 2600);
 }
 
-/* ── audio analyze ──────────────────────────────────────────────────────── */
-async function audioPick() {
-  const pick = await post("/api/pick", { kind: "file" });
-  if (!pick || !pick.ok || !pick.path) return;
-  const r = await post("/api/audio/analyze", { path: pick.path });
-  if (!r.ok) { alert(r.error); return; }
-  showAudioLoading();
-  pollJob(r.id, null, (j) => showAudio(j.result), (j) => alert(j.message));
-}
-function showAudioLoading() {
-  $("#audioModalCard").innerHTML = `<h2>מנתח אודיו…</h2><div class="progress"><i style="width:60%"></i></div>`;
-  $("#audioModal").classList.remove("hidden");
-}
-function showAudio(a) {
-  if (!a) { $("#audioModal").classList.add("hidden"); return; }
-  const card = $("#audioModalCard");
-  card.innerHTML = `<h2>בדיקת אודיו ליוטיוב</h2>
-    <div class="verdict" style="background:${a.color}">${a.verdict}</div>
-    <div class="rows">
-      <div class="mrow"><span>עוצמה משולבת</span><span class="mono">${a.integrated_lufs.toFixed(1)} LUFS</span></div>
-      <div class="mrow"><span>שיא אמיתי</span><span class="mono">${a.true_peak_dbfs.toFixed(1)} dBTP</span></div>
-    </div>
-    <div class="obs">${a.observations.map((o) => `<div>${o}</div>`).join("")}</div>
-    ${a.recommendation ? `<div class="rec">💡 ${a.recommendation}</div>` : ""}
-    <div class="done-actions">
-      ${!a.verdict.startsWith("✅") ? `<button class="btn" id="normBtn">🎛️ נרמל ל-14- LUFS</button>` : ""}
-      <button class="btn ghost" onclick="document.getElementById('audioModal').classList.add('hidden')">סגור</button>
-    </div>`;
-  const nb = $("#normBtn");
-  if (nb) nb.onclick = async () => {
-    nb.disabled = true; nb.textContent = "מנרמל…";
-    const r = await post("/api/audio/normalize", { path: a.path });
-    if (!r.ok) { alert(r.error); return; }
-    pollJob(r.id, null, (j) => { alert("נשמר: " + j.result.output_path); reveal(j.result.output_path); $("#audioModal").classList.add("hidden"); }, (j) => alert(j.message));
-  };
+/* ── audio: hand off to video-prep ──────────────────────────────────────── */
+/* Creator Studio used to analyze and normalize here, through its own
+   audio_tools.py. video-prep's נרמול אודיו tab does the same job better
+   (voice chain, optional denoise, before/after preview), so this now just
+   makes sure that app is up and opens its tab — one implementation, not two. */
+async function audioOpen() {
+  flash("פותח נרמול אודיו…");
+  const r = await post("/api/audio/open");
+  if (!r || !r.ok) { alert((r && r.error) || "לא הצלחתי לפתוח את video-prep"); return; }
+  window.open(r.url, "_blank");
 }
 
 /* ── VSL publishing (Wistia → Event-Engine) ─────────────────────────────── */
