@@ -218,7 +218,7 @@ Inno Setup went in **per-user**, so `ISCC.exe` is at
   davinci-automation script is reached over `E:` and runs under the laptop's
   `py -3.10`. ⚠️ That interpreter needs **`requests`** (`py -3.10 -m pip install
   requests`): without it every transcription fails with `ModuleNotFoundError`
-  after three retries. It was missing until 2026-09-23 18:53, so the earlier
+  after three retries. It was missing until 2026-09-23 17:53, so the earlier
   "verified" note did not cover a real run. Installed and re-run then. **Home-PC only:** `local` GPU transcription
   and the DaVinci tiles.
 
