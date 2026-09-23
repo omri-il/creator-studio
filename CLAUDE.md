@@ -122,14 +122,38 @@ So it works regardless of the exact P4 filename convention. Threshold is tunable
   fixes if this gets old: code-sign the exe, or just run from source (`run.bat`).
 
 ## Config / defaults
-- Osmo backup root default: `E:\Video Projects\Osmo Imports\` (dated subfolder per
-  import). Change in the import screen (persisted as `osmo_backup_root`).
+- Osmo backup root default: `D:\DJI Pocket Archive` (`osmo_import.DEFAULT_BACKUP_ROOT`,
+  dated subfolder per import). Change in the import screen (persisted as
+  `osmo_backup_root`). ⚠️ That default is a **home-PC** path — on the laptop `D:` is
+  an empty card-reader slot, so the laptop's setting must be overridden (see below).
 - Default import actions all ON: merge sessions, transcribe Hebrew, keep originals.
 - **Transcription engine defaults to the VPS whisper-agent** (`transcribe_backend`
   = `vps`; Omri's preference 2026-07-03). Switch to local GPU in the import screen
   (persisted). See Reuse for the two backends.
 - Mic: first-run default **unlocked** (lock is opt-in from the app screen). When
   locked, target defaults to 90% (`mic_locked`/`mic_lock_target` persisted).
+
+## Laptop install (2026-09-23)
+
+The Omnibook laptop runs the same installed build (`C:\Program Files\Creator Studio`,
+startup shortcut on) so plugging the Osmo in there opens the import window too.
+Built on the laptop itself: `py -3.10` + Inno Setup were installed with winget, and
+Inno Setup went in **per-user**, so `ISCC.exe` is at
+`%LOCALAPPDATA%\Programs\Inno Setup 6\`, not the `Program Files (x86)` path
+`build.bat` looks for — call it directly. Defender did not flag this build.
+
+- **Home-PC drives on the laptop** come from `laptop-setup\map-video-drive.ps1`
+  (scheduled task `MapVideoDrive`, every 2 min, runs from the main checkout's
+  `laptop-setup\`): home `E:` → **`E:`** (same letter, so `E:\…` paths resolve
+  identically) and home `D:` → **`S:`** (laptop `D:` is taken; `S:` is the letter
+  the Surface used). Shares are Remote-HDD's `DriveE`/`DriveD`, `netshare` creds
+  stored via `cmdkey`.
+- **`osmo_backup_root` on the laptop** is set in `%LOCALAPPDATA%\StudioFlow\settings.json`
+  — never leave it on the `D:\…` default there.
+- **Works there:** detection, copy, merge, and **`vps` transcription** — the
+  davinci-automation script is reached over `E:` and runs under the laptop's
+  `py -3.10` (verified 2026-09-23). **Home-PC only:** `local` GPU transcription
+  and the DaVinci tiles.
 
 ## VSL publishing (Wistia → Event-Engine)
 

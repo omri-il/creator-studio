@@ -8,3 +8,5 @@ build/
 dist/
 *.spec.bak
 *.concat.txt
+.claude/worktrees/
+laptop-setup/*.log
