@@ -212,14 +212,34 @@ def _load_manifest(backup_root: str) -> dict:
 
 
 def _save_manifest(backup_root: str, manifest: dict) -> None:
+    """Write via a temp file + rename, so a crash mid-write (or a reader on the
+    other machine) never sees a half-written, unparseable manifest — which
+    _load_manifest would read as {} and re-import everything."""
     import json
     os.makedirs(backup_root, exist_ok=True)
     p = os.path.join(backup_root, MANIFEST_NAME)
+    tmp = p + ".tmp"
     try:
-        with open(p, "w", encoding="utf-8") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, p)
     except Exception:
         pass
+
+
+def record_imported(backup_root: str, key: str, entry: dict) -> dict:
+    """Mark ONE clip imported, right after its copy lands. Re-reads the manifest
+    first so entries written meanwhile by someone else (the home PC imports into
+    the same share) are kept, not overwritten by our stale copy. Returns the
+    merged manifest.
+
+    Why per clip: the manifest used to be saved once, after every copy finished.
+    A second import started mid-way (2026-09-23) saw the clips the first had
+    already copied as new and copied them again."""
+    manifest = _load_manifest(backup_root)
+    manifest[key] = entry
+    _save_manifest(backup_root, manifest)
+    return manifest
 
 
 def get_backup_root() -> str:
@@ -408,34 +428,77 @@ def transcribe_files(paths, dest_dir: str, backend: str | None = None,
     return out
 
 
+PART_SUFFIX = ".part"
+
+
+def plan_dest(dest_dir: str, name: str, size: int) -> tuple[str, bool]:
+    """Where to copy clip `name` (`size` bytes) → (dst_path, already_there).
+
+    Copies only ever appear under their final name once complete (see
+    _copy_with_progress), so a file of the SAME size at the target is a finished
+    copy — reuse it rather than copy again (this is what a crash between the copy
+    and the manifest write leaves behind). A DIFFERENT-sized file there is not
+    ours to overwrite: go to `<stem>_<size><ext>` instead (itself reused if it is
+    already complete). Never returns a path whose existing file would be clobbered.
+    """
+    size = int(size or 0)
+    dst = os.path.join(dest_dir, name)
+    if not os.path.exists(dst):
+        return dst, False
+    if os.path.getsize(dst) == size:
+        return dst, True
+    stem, ext = os.path.splitext(name)
+    alt = os.path.join(dest_dir, f"{stem}_{size}{ext}")
+    return alt, os.path.exists(alt) and os.path.getsize(alt) == size
+
+
 def _copy_with_progress(src: str, dst: str, cb=None):
     """shutil.copyfile-equivalent chunked read/write, reporting percent/speed/ETA
     via cb(pct, speed_bytes_per_sec, eta_sec) roughly twice a second.
+
+    Writes to `<dst>.part` and renames onto `dst` only once every byte is there,
+    so an interrupted copy never looks complete and never truncates a good file
+    (the old in-place "wb" open did both). A stale `.part` from an earlier crash
+    is simply started over; a failed copy removes its `.part`.
 
     Deliberately NOT shutil.copyfile's Windows CopyFile2 fast path: CopyFile2 is
     known to be pathologically slow copying off FAT32/exFAT media (exactly how DJI
     formats its SD cards) due to extra per-cluster flush/sync behavior — verified
     on a real Osmo import (0.2 MB/s vs ~4-5 MB/s with a plain buffered loop)."""
+    part = dst + PART_SUFFIX
+    if os.path.exists(part):
+        os.remove(part)
     total = os.path.getsize(src) or 1
     done = 0
     last_done, last_t = 0, time.monotonic()
-    with open(src, "rb") as fsrc, open(dst, "wb") as fdst:
-        while True:
-            chunk = fsrc.read(4 * 1024 * 1024)
-            if not chunk:
-                break
-            fdst.write(chunk)
-            done += len(chunk)
-            now = time.monotonic()
-            dt = now - last_t
-            if cb and dt >= 0.5:
-                speed = (done - last_done) / dt
-                eta = max(0, total - done) / speed if speed > 0 else None
-                cb(min(100.0, done / total * 100), speed, eta)
-                last_done, last_t = done, now
+    try:
+        with open(src, "rb") as fsrc, open(part, "wb") as fdst:
+            while True:
+                chunk = fsrc.read(4 * 1024 * 1024)
+                if not chunk:
+                    break
+                fdst.write(chunk)
+                done += len(chunk)
+                now = time.monotonic()
+                dt = now - last_t
+                if cb and dt >= 0.5:
+                    speed = (done - last_done) / dt
+                    eta = max(0, total - done) / speed if speed > 0 else None
+                    cb(min(100.0, done / total * 100), speed, eta)
+                    last_done, last_t = done, now
+        if os.path.getsize(part) != os.path.getsize(src):
+            raise OSError(f"copy incomplete: {os.path.getsize(part)} of "
+                          f"{os.path.getsize(src)} bytes")
+        shutil.copystat(src, part, follow_symlinks=True)
+        os.replace(part, dst)
+    except BaseException:
+        try:
+            os.remove(part)
+        except OSError:
+            pass
+        raise
     if cb:
         cb(100.0, 0, None)
-    shutil.copystat(src, dst, follow_symlinks=True)
 
 
 def run_import(source_dir: str, options: dict, progress=None) -> dict:
@@ -461,9 +524,8 @@ def run_import(source_dir: str, options: dict, progress=None) -> dict:
     scan = scan_source(source_dir, backup_root)
     dest_dir = scan["dest_dir"]
     os.makedirs(dest_dir, exist_ok=True)
-    manifest = _load_manifest(backup_root)
 
-    summary = {"dest_dir": dest_dir, "copied": [], "merged": [],
+    summary = {"dest_dir": dest_dir, "copied": [], "reused": [], "merged": [],
                "transcribe_targets": [], "transcribed": [], "skipped": 0,
                "errors": [], "transcribe_backend": backend}
 
@@ -485,11 +547,7 @@ def run_import(source_dir: str, options: dict, progress=None) -> dict:
     for s in pending_sessions:
         s["dest_clips"] = []
         for c in s["clips"]:
-            dst = os.path.join(dest_dir, c["name"])
-            # avoid clobbering a differently-sized file of the same name
-            if os.path.exists(dst) and os.path.getsize(dst) != int(c.get("size") or -1):
-                stem, ext = os.path.splitext(c["name"])
-                dst = os.path.join(dest_dir, f"{stem}_{int(c.get('size',0))}{ext}")
+            dst, already_there = plan_dest(dest_dir, c["name"], c.get("size") or 0)
             base = copied_index / total_new * 60.0
 
             def _cb(fp, speed=None, eta=None, _base=base):
@@ -503,18 +561,21 @@ def run_import(source_dir: str, options: dict, progress=None) -> dict:
                 _p(_base + (fp / 100.0) * (60.0 / total_new),
                    f"מעתיק {c['name']}…{extra}")
             try:
-                _copy_with_progress(c["path"], dst, _cb)
+                if already_there:
+                    _p(base, f"כבר קיים ביעד: {c['name']}")
+                    summary["reused"].append(dst)
+                else:
+                    _copy_with_progress(c["path"], dst, _cb)
                 s["dest_clips"].append(dst)
                 summary["copied"].append(dst)
-                manifest[c["key"]] = {
+                record_imported(backup_root, c["key"], {
                     "name": c["name"], "size": int(c.get("size") or 0),
                     "imported_at": datetime.now().isoformat(timespec="seconds"),
                     "dest": dst,
-                }
+                })
             except Exception as e:
                 summary["errors"].append(f"copy {c['name']}: {e}")
             copied_index += 1
-    _save_manifest(backup_root, manifest)
 
     # ── Phase 2: merge sessions (60–85%) ─────────────────────────────────────
     outputs_for_transcribe = []

@@ -114,6 +114,32 @@ def api_osmo_scan():
     return jsonify({"ok": True, **scan})
 
 
+# One Osmo job at a time where it matters. Two imports at once copied the same
+# clips into the same folder (2026-09-23); a transcribe alongside an import can
+# transcribe the same file twice. A transcribe does not block a new import —
+# they touch different files, and a long transcription would otherwise hold
+# the camera hostage for hours.
+OSMO_IMPORT, OSMO_TRANSCRIBE = "osmo-import", "osmo-transcribe"
+_BUSY_MSG = {
+    OSMO_IMPORT: "ייבוא כבר רץ — מציג את ההתקדמות שלו. אפשר להתחיל ייבוא חדש כשהוא יסתיים.",
+    OSMO_TRANSCRIBE: "תמלול כבר רץ — מציג את ההתקדמות שלו. אפשר להתחיל חדש כשהוא יסתיים.",
+}
+
+
+def _busy(e: jobs.JobBusy):
+    kind = e.job.get("kind")
+    return jsonify({"ok": False, "busy": True, "error": _BUSY_MSG.get(kind, "משימה כבר רצה"),
+                    "job": e.job}), 409
+
+
+@app.route("/api/osmo/active")
+def api_osmo_active():
+    """The running Osmo import, if any — so a window reopened by the camera
+    watcher shows that job's progress instead of offering a second Start. (A
+    running transcription is left out: it does not block an import.)"""
+    return jsonify({"job": jobs.running(OSMO_IMPORT)})
+
+
 @app.route("/api/osmo/import", methods=["POST"])
 def api_osmo_import():
     data = request.get_json(force=True, silent=True) or {}
@@ -127,8 +153,12 @@ def api_osmo_import():
         "keep_originals": bool(data.get("keep_originals", True)),
         "backup_root": data.get("backup_root"),
     }
-    jid = jobs.run(lambda update: osmo_import.run_import(
-        source, options, progress=lambda pct, msg: update(pct, msg)))
+    try:
+        jid = jobs.run(lambda update: osmo_import.run_import(
+            source, options, progress=lambda pct, msg: update(pct, msg)),
+            kind=OSMO_IMPORT, exclusive=(OSMO_IMPORT,))
+    except jobs.JobBusy as e:
+        return _busy(e)
     return jsonify({"ok": True, "id": jid})
 
 
@@ -145,8 +175,12 @@ def api_osmo_transcribe():
         return jsonify({"ok": False, "error": "סקריפט התמלול לא נמצא"}), 503
     backend = data.get("transcribe_backend")
     dest_dir = data.get("dest_dir") or os.path.dirname(paths[0])
-    jid = jobs.run(lambda update: osmo_import.transcribe_files(
-        paths, dest_dir, backend=backend, progress=lambda pct, msg: update(pct, msg)))
+    try:
+        jid = jobs.run(lambda update: osmo_import.transcribe_files(
+            paths, dest_dir, backend=backend, progress=lambda pct, msg: update(pct, msg)),
+            kind=OSMO_TRANSCRIBE, exclusive=(OSMO_IMPORT, OSMO_TRANSCRIBE))
+    except jobs.JobBusy as e:
+        return _busy(e)
     return jsonify({"ok": True, "id": jid})
 
 

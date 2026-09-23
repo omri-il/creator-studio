@@ -2,6 +2,8 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import osmo_import as oi  # noqa: E402
@@ -123,3 +125,121 @@ def test_session_label_fallback_to_stem():
     oi.assign_timeline(clips)
     # start = 0 - 600 = -600 -> may still format; ensure it returns a string
     assert isinstance(oi.session_label(clips), str)
+
+
+# ── destination planning + .part copies (the 2026-09-23 double-import) ───────
+
+def _write(path, nbytes):
+    with open(path, "wb") as f:
+        f.write(b"x" * nbytes)
+
+
+def test_plan_dest_free_name(tmp_path):
+    dst, there = oi.plan_dest(str(tmp_path), "DJI_0001.MP4", 100)
+    assert dst == str(tmp_path / "DJI_0001.MP4") and there is False
+
+
+def test_plan_dest_same_size_is_a_finished_copy(tmp_path):
+    _write(tmp_path / "DJI_0001.MP4", 100)
+    dst, there = oi.plan_dest(str(tmp_path), "DJI_0001.MP4", 100)
+    assert dst == str(tmp_path / "DJI_0001.MP4") and there is True
+
+
+def test_plan_dest_never_targets_a_different_sized_file(tmp_path):
+    _write(tmp_path / "DJI_0001.MP4", 40)          # someone else's / legacy junk
+    dst, there = oi.plan_dest(str(tmp_path), "DJI_0001.MP4", 100)
+    assert dst == str(tmp_path / "DJI_0001_100.MP4") and there is False
+    _write(tmp_path / "DJI_0001_100.MP4", 100)     # …and that one, once complete
+    assert oi.plan_dest(str(tmp_path), "DJI_0001.MP4", 100) == (dst, True)
+
+
+def test_copy_goes_through_part_and_leaves_no_part(tmp_path):
+    src, dst = tmp_path / "src.mp4", tmp_path / "out" / "dst.mp4"
+    dst.parent.mkdir()
+    _write(src, 5 * 1024 * 1024 + 7)               # > one 4 MiB chunk
+    oi._copy_with_progress(str(src), str(dst))
+    assert dst.read_bytes() == src.read_bytes()
+    assert not (dst.parent / "dst.mp4.part").exists()
+
+
+def test_copy_replaces_a_stale_part(tmp_path):
+    src, dst = tmp_path / "src.mp4", tmp_path / "dst.mp4"
+    _write(src, 1000)
+    _write(tmp_path / "dst.mp4.part", 5000)        # left by a crash, bigger even
+    oi._copy_with_progress(str(src), str(dst))
+    assert dst.stat().st_size == 1000
+    assert not (tmp_path / "dst.mp4.part").exists()
+
+
+def test_failed_copy_never_touches_the_target(tmp_path, monkeypatch):
+    src, dst = tmp_path / "src.mp4", tmp_path / "dst.mp4"
+    _write(src, 1000)
+    dst.write_bytes(b"good finished copy")
+
+    def boom(*a, **k):
+        raise OSError("share went away")
+    monkeypatch.setattr(oi.shutil, "copystat", boom)
+    with pytest.raises(OSError):
+        oi._copy_with_progress(str(src), str(dst))
+    assert dst.read_bytes() == b"good finished copy"   # the old "wb" truncated it
+    assert not (tmp_path / "dst.mp4.part").exists()
+
+
+# ── manifest: written per clip, merged with what is already on disk ──────────
+
+def test_record_imported_keeps_entries_written_meanwhile(tmp_path):
+    root = str(tmp_path)
+    oi.record_imported(root, "a|1", {"name": "a"})
+    # Another writer (the other machine) adds b; our next record must not drop it.
+    m = oi._load_manifest(root)
+    m["b|2"] = {"name": "b"}
+    oi._save_manifest(root, m)
+    oi.record_imported(root, "c|3", {"name": "c"})
+    assert set(oi._load_manifest(root)) == {"a|1", "b|2", "c|3"}
+    assert not os.path.exists(os.path.join(root, oi.MANIFEST_NAME + ".tmp"))
+
+
+def _fake_scan(tmp_path, names):
+    cam = tmp_path / "cam"
+    cam.mkdir()
+    clips = []
+    for n in names:
+        _write(cam / n, 100)
+        clips.append({"name": n, "path": str(cam / n), "size": 100,
+                      "key": oi.manifest_key(n, 100), "already": False})
+    backup = tmp_path / "backup"
+    return str(cam), str(backup), {
+        "dest_dir": str(backup / "2026-09-23"),
+        "sessions": [{"label": "S", "clips": [c]} for c in clips]}
+
+
+def test_run_import_records_each_clip_before_copying_the_next(tmp_path, monkeypatch):
+    cam, backup, scan = _fake_scan(tmp_path, ["A.MP4", "B.MP4", "C.MP4"])
+    monkeypatch.setattr(oi, "scan_source", lambda *a, **k: scan)
+    seen = []
+    real_copy = oi._copy_with_progress
+
+    def spy(src, dst, cb=None):
+        # What a second import started right now would read as "already done".
+        seen.append(sorted(oi._load_manifest(backup)))
+        real_copy(src, dst, cb)
+    monkeypatch.setattr(oi, "_copy_with_progress", spy)
+
+    out = oi.run_import(cam, {"backup_root": backup, "merge": False,
+                              "transcribe": False})
+    assert seen == [[], ["A.MP4|100"], ["A.MP4|100", "B.MP4|100"]]
+    assert len(out["copied"]) == 3 and not out["errors"]
+
+
+def test_run_import_reuses_a_finished_copy_missing_from_the_manifest(tmp_path, monkeypatch):
+    # Exactly what the old build left behind: file copied, manifest never saved.
+    cam, backup, scan = _fake_scan(tmp_path, ["A.MP4"])
+    os.makedirs(scan["dest_dir"])
+    _write(os.path.join(scan["dest_dir"], "A.MP4"), 100)
+    monkeypatch.setattr(oi, "scan_source", lambda *a, **k: scan)
+    monkeypatch.setattr(oi, "_copy_with_progress",
+                        lambda *a, **k: pytest.fail("must not copy again"))
+    out = oi.run_import(cam, {"backup_root": backup, "merge": False,
+                              "transcribe": False})
+    assert out["reused"] == [os.path.join(scan["dest_dir"], "A.MP4")]
+    assert "A.MP4|100" in oi._load_manifest(backup)

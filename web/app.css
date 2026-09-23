@@ -190,6 +190,10 @@ main{max-width:980px;margin:0 auto;padding:34px 26px 80px;position:relative;z-in
   background:linear-gradient(90deg,var(--teal),var(--amber));
   background-size:200% 100%;animation:shim 1.4s linear infinite;transition:width .4s var(--ease)}
 @keyframes shim{to{background-position:-200% 0}}
+/* "an import is already running" — same amber note as the VSL size warning. */
+.job-note{color:var(--amber);background:rgba(255,184,77,.08);
+  border:1px solid rgba(255,184,77,.28);border-radius:var(--r-sm);
+  padding:9px 12px;margin-bottom:12px;font-size:13px;line-height:1.55}
 
 /* done summary */
 .done{background:var(--surface);border:1px solid var(--green);border-radius:var(--r);padding:22px;box-shadow:var(--shadow)}

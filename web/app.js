@@ -19,7 +19,8 @@ const fmtDur = (s) => {
   return m + ":" + String(s % 60).padStart(2, "0");
 };
 
-let state = { source: "", lastDrive: null, toastDismissed: false, features: {}, txBackend: "vps" };
+let state = { source: "", lastDrive: null, toastDismissed: false, features: {}, txBackend: "vps",
+              activeJob: null, polling: null };
 
 /* transcription backend chooser (☁️ שרת whisper-agent / 💻 מקומי GPU) */
 function setTxBackend(b, save) {
@@ -41,6 +42,7 @@ function showImport() {
   $("#toast").classList.add("hidden");
   detectDrives();
   loadDest();
+  checkActiveJob();
 }
 function showVsl() {
   setView("view-vsl");
@@ -171,7 +173,8 @@ function renderSessions(res) {
   }
   box.innerHTML = html;
   box.classList.remove("hidden");
-  $("#optionsPanel").classList.toggle("hidden", c.new === 0);
+  // Never offer Start while an import is running — its progress shows instead.
+  $("#optionsPanel").classList.toggle("hidden", c.new === 0 || !!state.activeJob);
   if (c.new === 0) {
     box.innerHTML += `<div class="panel">כל הקליפים כבר יובאו בעבר — אין מה להעתיק. ✅</div>`;
   }
@@ -188,17 +191,60 @@ async function startImport() {
     backup_root: $("#destPath").dataset.root,
   };
   $("#optionsPanel").classList.add("hidden");
+  $("#jobNote").classList.add("hidden");
   $("#jobPanel").classList.remove("hidden");
   $("#donePanel").classList.add("hidden");
   const r = await post("/api/osmo/import", body);
-  if (!r.ok) { alert(r.error || "הייבוא נכשל להתחיל"); return; }
-  pollJob(r.id, (j) => {
-    $("#jobBar").style.width = (j.progress || 0) + "%";
-    $("#jobPct").textContent = Math.round(j.progress || 0) + "%";
-    $("#jobMsg").textContent = j.message || "";
-  }, (j) => renderDone(j.result), (j) => {
-    $("#jobMsg").textContent = j.message || "שגיאה";
-  });
+  if (r.busy && r.job) { attachToJob(r.job, r.error); return; }
+  if (!r.ok) {
+    alert(r.error || "הייבוא נכשל להתחיל");
+    $("#jobPanel").classList.add("hidden");
+    $("#optionsPanel").classList.remove("hidden");
+    return;
+  }
+  followImport(r.id);
+}
+
+const showJobProgress = (j) => {
+  $("#jobBar").style.width = (j.progress || 0) + "%";
+  $("#jobPct").textContent = Math.round(j.progress || 0) + "%";
+  $("#jobMsg").textContent = j.message || "";
+};
+
+function followImport(id) {
+  state.activeJob = state.polling = id;   // activeJob = the running IMPORT only
+  pollJob(id, showJobProgress, (j) => { state.activeJob = null; renderDone(j.result); },
+    (j) => { state.activeJob = null; $("#jobMsg").textContent = j.message || "שגיאה"; });
+}
+
+/* An Osmo job is already running (started from this window earlier, from the
+   API, or before the camera watcher reopened the window): show ITS progress,
+   with a note, instead of a second Start button. */
+function attachToJob(job, note) {
+  $("#optionsPanel").classList.add("hidden");
+  $("#donePanel").classList.add("hidden");
+  $("#jobPanel").classList.remove("hidden");
+  const n = $("#jobNote");
+  n.textContent = note || (job.kind === "osmo-transcribe"
+    ? "תמלול כבר רץ — מציג את ההתקדמות שלו."
+    : "ייבוא כבר רץ — מציג את ההתקדמות שלו.");
+  n.classList.remove("hidden");
+  showJobProgress(job);
+  if (state.polling === job.id) return;     // already polling this one
+  if (job.kind === "osmo-transcribe") {
+    // A transcription does not block a new import, so it is not activeJob.
+    state.polling = job.id;
+    pollJob(job.id, showJobProgress, (j) => renderTxDone(j.result, []),
+      (j) => { $("#jobMsg").textContent = j.message || "שגיאה"; });
+  } else {
+    followImport(job.id);
+  }
+}
+
+async function checkActiveJob() {
+  let r;
+  try { r = await api("/api/osmo/active"); } catch (e) { return; }
+  if (r && r.job) attachToJob(r.job);
 }
 
 function renderDone(r) {
@@ -235,6 +281,7 @@ async function retranscribe(paths, destDir) {
   const rt = $("#retryTxBtn");
   if (rt) { rt.disabled = true; rt.textContent = "מתמלל…"; }
   const r = await post("/api/osmo/transcribe", { paths, dest_dir: destDir, transcribe_backend: state.txBackend });
+  if (r.busy && r.job) { attachToJob(r.job, r.error); return; }
   if (!r.ok) { alert(r.error || "התמלול נכשל להתחיל"); if (rt) { rt.disabled = false; rt.textContent = `🎙️ תמלל (${paths.length})`; } return; }
   $("#donePanel").classList.add("hidden");
   $("#jobPanel").classList.remove("hidden");

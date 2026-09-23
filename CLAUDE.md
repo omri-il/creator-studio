@@ -66,13 +66,14 @@ polls — the exact `jobs.py` pattern from **video-prep**.
 | `osmo_import.py` | Camera detect, DCIM scan (skip `.LRF`/`.SRT`), **session grouping**, idempotent copy, import orchestration (copy → merge → transcribe). |
 | `mic.py` | `get/set_mic_volume`, headless `MicMonitor` (silent lock loop). |
 | `davinci.py` | Resolve launch, project create, dashboard/bot/watch launchers, Tailscale drive map. New projects land in the shared network Resolve Project Library (`Resolve Shared Library`) by default since 2026-07 — see davinci-automation's CLAUDE.md "Database Structure" section (no code change here; it's `new_project.py`'s own default). |
-| `jobs.py` | In-memory job registry + progress (UI polls `GET /api/job/<id>`). |
+| `jobs.py` | In-memory job registry + progress (UI polls `GET /api/job/<id>`). Jobs carry a `kind`; `run(..., exclusive=…)` raises `JobBusy` instead of starting a second one (see "One import at a time"). |
 | `web/` | `index.html`, `app.css`, `app.js` — RTL "control-room" UI (Rubik/Heebo, amber+teal on near-black). |
 | `wistia.py` | Wistia Upload API client. **Streams** the file with a real `Content-Length` (`_MultipartBody`) — a Resolve master does not fit in RAM, which is the whole reason this is not a `requests.post(files=…)` one-liner. `media_url()` is the canonical link because it is guaranteed to match Event-Engine's `vsl.py` regex, with no account-subdomain guessing. |
 | `eventengine.py` | Client for Event-Engine's token-guarded `/api/media/*`. Errors are returned with what to fix, never raw HTTP codes. |
 | `vsl_publish.py` | The pipeline both surfaces share: config, `latest_video`, the size warning, and `publish()`. One home so the CLI and the button cannot drift. |
 | `publish_vsl.py` | The CLI. `--latest`, `--pick`, `--event`, `--dry-run`; copies the link to the clipboard. |
-| `tests/test_osmo.py` | Unit tests for the pure grouping/timeline/manifest logic. |
+| `tests/test_osmo.py` | Unit tests for the pure grouping/timeline/manifest logic, `plan_dest`, `.part` copies, and the per-clip manifest. |
+| `tests/test_osmo_lock.py` | The one-import-at-a-time rule, through the real Flask routes (workers stubbed to block). |
 | `tests/test_wistia.py` · `test_publish_vsl.py` · `test_vsl_routes.py` | The VSL pipeline, network stubbed throughout. |
 
 ## How session grouping works (the "smart merge")
@@ -86,6 +87,38 @@ separate takes leave a real gap. `osmo_import`:
 So it works regardless of the exact P4 filename convention. Threshold is tunable.
 **Idempotency:** an `imported.json` manifest in the backup root, keyed by
 `filename|size`; already-imported clips are greyed and never re-copied.
+
+## One import at a time — and copies that can't lie (2026-09-23)
+
+**What happened:** on the laptop, an import started via `POST /api/osmo/import`
+was still copying ~85 min later when the camera-detect window started a second
+one. Both copied the same clips into the same `S:\DJI Pocket Archive\<date>`:
+the manifest was only saved after *all* copies, so the second job saw every clip
+as new, and it re-opened same-sized finished files with `"wb"`, truncating them.
+
+Three rules now, each load-bearing:
+- **One Osmo import per app.** `POST /api/osmo/import` answers **409** +
+  `busy: true` + the running job while one runs; `POST /api/osmo/transcribe` is
+  refused during an import or another transcribe. A running *transcribe* does
+  not block an import (different files; it could hold the camera for hours).
+  `GET /api/osmo/active` returns the running import, and the import view calls
+  it on open — so the window shows that job's progress with an amber note and
+  **no Start button**. The check-and-register happens under one lock in `jobs.py`.
+  ⚠️ This is per process. Two *machines* importing into the same share (home PC
+  `D:` is the laptop's `S:`) are not locked against each other — the two rules
+  below are what keep that case from destroying data.
+- **The manifest is written after every clip** (`record_imported`), re-read and
+  merged before each write, and saved via temp file + `os.replace` so a crash
+  never leaves half-written JSON (which would read as `{}` = re-import all).
+- **Copies go to `<name>.part` and are renamed on success.** So a file under
+  its final name is always complete: `plan_dest` reuses a same-sized one instead
+  of copying again (this also recovers "copied but never recorded"), sends a
+  different-sized one's clip to `<stem>_<size><ext>` rather than overwriting it,
+  and a stale `.part` is simply started over. A failed copy deletes its `.part`.
+  ⚠️ Builds before this fix wrote in place, so **old dated folders can hold
+  truncated files under the real name** (e.g. `2026-09-22` has a 0-byte `…0064_D.MP4`).
+  The new code never overwrites them (it copies to `_<size>` beside them); clean
+  them up by hand after comparing sizes with the card.
 
 ## Reuse (one truth per topic)
 - Lossless merge command is the same concat-demuxer `-c copy` as
@@ -150,6 +183,14 @@ Inno Setup went in **per-user**, so `ISCC.exe` is at
   stored via `cmdkey`.
 - **`osmo_backup_root` on the laptop** is set in `%LOCALAPPDATA%\StudioFlow\settings.json`
   — never leave it on the `D:\…` default there.
+- 🔴 **Both installs need the 2026-09-23 installer** (the import-lock fix above):
+  the laptop, and the **home PC** (`C:\Program Files\Creator Studio`, still a
+  **2026-07-03 build**). Build it with `build.bat`'s two steps; the result is
+  `dist\installer\CreatorStudio-Setup-2.0.0.exe` in the main checkout (built on
+  the laptop, SHA-256 `08A4E00B…80F0`). **Never run the installer while an import
+  is copying** — it kills `CreatorStudio.exe` and the copy dies mid-file. Check
+  the window, or that nothing under the dated folder is still growing. Once both
+  are installed, delete this bullet.
 - **Works there:** detection, copy, merge, and **`vps` transcription** — the
   davinci-automation script is reached over `E:` and runs under the laptop's
   `py -3.10` (verified 2026-09-23). **Home-PC only:** `local` GPU transcription
