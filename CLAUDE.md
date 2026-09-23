@@ -183,14 +183,22 @@ Inno Setup went in **per-user**, so `ISCC.exe` is at
   stored via `cmdkey`.
 - **`osmo_backup_root` on the laptop** is set in `%LOCALAPPDATA%\StudioFlow\settings.json`
   — never leave it on the `D:\…` default there.
-- 🔴 **Both installs need the 2026-09-23 installer** (the import-lock fix above):
-  the laptop, and the **home PC** (`C:\Program Files\Creator Studio`, still a
-  **2026-07-03 build**). Build it with `build.bat`'s two steps; the result is
-  `dist\installer\CreatorStudio-Setup-2.0.0.exe` in the main checkout (built on
-  the laptop, SHA-256 `08A4E00B…80F0`). **Never run the installer while an import
-  is copying** — it kills `CreatorStudio.exe` and the copy dies mid-file. Check
-  the window, or that nothing under the dated folder is still growing. Once both
-  are installed, delete this bullet.
+- 🔴 **The laptop still needs the 2026-09-23 installer** (the import-lock fix
+  above). ✅ The **home PC** got it 2026-09-23 16:33 over SSH (below). The
+  installer is `dist\installer\CreatorStudio-Setup-2.0.0.exe` in the main
+  checkout (built on the laptop, SHA-256 `08A4E00B…80F0`). **Never run it while
+  an import is copying** — it kills `CreatorStudio.exe` and the copy dies
+  mid-file. Check the window, or that nothing under the dated folder is still
+  growing. Once the laptop is done, delete this bullet.
+- **Installing on the home PC over SSH** (how it was done 2026-09-23): `scp` the
+  installer over, then run it with `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=…`.
+  A reinstall keeps the earlier task choices, so the startup shortcut stays. The
+  silent install does **not** relaunch the app (`skipifsilent`), and starting the
+  exe from the SSH shell would put it in invisible session 0. Relaunch through a
+  one-off scheduled task with `-LogonType Interactive` for
+  **`$env:COMPUTERNAME\omrii`**, then delete the task. ⚠️ Over SSH,
+  `$env:USERDOMAIN` is `WORKGROUP`, and a task registered for that account
+  silently never runs. Verify with `GET /api/osmo/active` (only new builds have it).
 - **Works there:** detection, copy, merge, and **`vps` transcription** — the
   davinci-automation script is reached over `E:` and runs under the laptop's
   `py -3.10` (verified 2026-09-23). **Home-PC only:** `local` GPU transcription
