@@ -196,9 +196,15 @@ Inno Setup went in **per-user**, so `ISCC.exe` is at
   `0064` looked stopped at 16:03 for over half an hour, yet the old build was
   still copying it — and the laptop install at 16:37 killed that copy at 2.9 of
   12.6 GB. CPU usage is no signal either: the copy loop is I/O-bound (~0%).
-- **Osmo imports run at ~0.8 MB/s** on the laptop (a 12.6 GB clip ≈ 4 h). The
-  Tailscale link to the home PC is direct at 7 ms, so the slow part is reading
-  the camera over USB. Not investigated further yet.
+- **A laptop import is only as fast as the laptop's internet upload** when the
+  laptop is away from home. Measured 2026-09-23 (~0.8 MB/s, a 12.6 GB clip ≈ 4 h):
+  the camera was 99.8% idle (2.5 ms reads), the home PC's `D:` 99.6% idle
+  (0.8 ms writes), and each SMB write to `S:` took 2.4 s. The laptop was on
+  another network (`10.0.0.x`, a different ISP than home's `192.168.1.x`), so
+  Tailscale's "direct" path still crossed the internet. SMB signing/encryption are
+  off, so nothing to gain there. To import big clips fast: plug the camera into
+  the **home PC**, or be on the home network. Measure before blaming the camera:
+  `PhysicalDisk(F:)\% Idle Time` vs `SMB Client Shares(...drived)\Avg. sec/Write`.
 - **Installing on the home PC over SSH** (how it was done 2026-09-23): `scp` the
   installer over, then run it with `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=…`.
   A reinstall keeps the earlier task choices, so the startup shortcut stays. The
