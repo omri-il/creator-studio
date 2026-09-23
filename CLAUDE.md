@@ -203,7 +203,12 @@ Inno Setup went in **per-user**, so `ISCC.exe` is at
   another network (`10.0.0.x`, a different ISP than home's `192.168.1.x`), so
   Tailscale's "direct" path still crossed the internet. SMB signing/encryption are
   off, so nothing to gain there. To import big clips fast: plug the camera into
-  the **home PC**, or be on the home network. Measure before blaming the camera:
+  the **home PC**, or be on the home network.
+  **Transcription has the same trap in reverse:** `vps` transcription runs ffmpeg
+  on the machine that started it, so a laptop away from home first pulls the
+  *whole video* back from `S:` (~0.4 MB/s — 2.9 GB ≈ 2 h) just to make a small MP3.
+  Run it on the home PC instead (its app, `POST /api/osmo/transcribe` with the
+  `D:\…` path — takes minutes). Done that way for `0063` on 2026-09-23. Measure before blaming the camera:
   `PhysicalDisk(F:)\% Idle Time` vs `SMB Client Shares(...drived)\Avg. sec/Write`.
 - **Installing on the home PC over SSH** (how it was done 2026-09-23): `scp` the
   installer over, then run it with `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=…`.
