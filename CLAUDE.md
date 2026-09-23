@@ -186,8 +186,19 @@ Inno Setup went in **per-user**, so `ISCC.exe` is at
 - ✅ **Both installs run the 2026-09-23 import-lock build** (home PC 16:33 over
   SSH, laptop 16:37; installer SHA-256 `08A4E00B…80F0`). **Never run an installer
   while an import is copying** — it kills `CreatorStudio.exe` and the copy dies
-  mid-file. Check the window, or that nothing under the dated folder is still
-  growing. The silent install does not reopen the app; start it afterwards.
+  mid-file. How to tell: `GET http://127.0.0.1:5015/api/osmo/active` on that
+  machine (non-null job = busy), and on the home PC `Get-SmbOpenFile` lists any
+  archive file the laptop has open. The silent install does not reopen the app;
+  start it afterwards.
+  ⚠️ **Do NOT judge "is it copying?" by a file's size or modified time.** While a
+  file is open for writing, the folder listing (Explorer, `Get-ChildItem`, even
+  from the home PC) keeps showing the old values. On 2026-09-23 the laptop's
+  `0064` looked stopped at 16:03 for over half an hour, yet the old build was
+  still copying it — and the laptop install at 16:37 killed that copy at 2.9 of
+  12.6 GB. CPU usage is no signal either: the copy loop is I/O-bound (~0%).
+- **Osmo imports run at ~0.8 MB/s** on the laptop (a 12.6 GB clip ≈ 4 h). The
+  Tailscale link to the home PC is direct at 7 ms, so the slow part is reading
+  the camera over USB. Not investigated further yet.
 - **Installing on the home PC over SSH** (how it was done 2026-09-23): `scp` the
   installer over, then run it with `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=…`.
   A reinstall keeps the earlier task choices, so the startup shortcut stays. The
