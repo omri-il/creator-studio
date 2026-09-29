@@ -164,6 +164,9 @@ Creator Studio still ran those copies on both machines (the laptop over SMB).
   `E:\DaVinci Automation\...`). So a change here reaches a machine only through a
   rebuild + reinstall (Run / build, Laptop install) — `git pull` changes nothing
   that runs. The same goes for `dist\CreatorStudio`: stale until the next build.
+  **Live since 2026-09-29 17:50 on the home PC only** (the `dbbe656` build). The
+  laptop is back on the 2026-09-23 build — Smart App Control blocks every new build
+  there (Run / build) — so the laptop still transcribes through the old `E:\` copies.
 - **The time limit must end the whole chain:** the app → `transcribe_auto.py` → the
   engine → ffmpeg. `subprocess.run(timeout=…)` kills only the first and then waits
   for the rest, which hold the output pipe (a 3 s limit waited 20 s in a test).
@@ -199,6 +202,22 @@ Creator Studio still ran those copies on both machines (the laptop over SMB).
   Protection history → the Bearfoos entry → Actions → Allow** (restores the exe +
   whitelists it). Each rebuild has a new hash and may need Allow again. Permanent
   fixes if this gets old: code-sign the exe, or just run from source (`run.bat`).
+  (The 2026-09-23 and 2026-09-29 builds, both made on the laptop, were not flagged;
+  on 09-29 a `Start-MpScan` of the new exe on the home PC came back clean before
+  the install.)
+- **🚨 Smart App Control blocks every new build on the LAPTOP** (read 2026-09-29:
+  `SmartAppControlState` **On** on the laptop, **Off** on the home PC —
+  `(Get-MpComputerStatus).SmartAppControlState`). A fresh unsigned `CreatorStudio.exe`
+  installs fine, then Windows refuses to start it ("An Application Control policy has
+  blocked this file"; CodeIntegrity events 3033/3077/3118). The 2026-09-23 build still
+  runs there, so that hash was let through (it was built while SAC was presumably
+  still in evaluation mode). SAC has no per-app allow; turning it off is one-way
+  (back on only by resetting Windows) and is Omri's call. Ways forward: run from
+  source on the laptop (`python.exe` is signed; the settings would have to stay in
+  `%LOCALAPPDATA%\StudioFlow`, which a source run does not use — `settings_store`),
+  or code-sign the exe. Until then **never install a new build on the laptop** — it
+  takes Creator Studio down there. Rollback = the 09-23 installer (home PC
+  `Downloads\CreatorStudio-Setup-2.0.0-2026-09-23.exe`, SHA-256 `08A4E00B…80F0`).
 
 ## Config / defaults
 - Osmo backup root default: `D:\DJI Pocket Archive` (`osmo_import.DEFAULT_BACKUP_ROOT`,
@@ -229,8 +248,12 @@ Inno Setup went in **per-user**, so `ISCC.exe` is at
   stored via `cmdkey`.
 - **`osmo_backup_root` on the laptop** is set in `%LOCALAPPDATA%\StudioFlow\settings.json`
   — never leave it on the `D:\…` default there.
-- ✅ **Both installs run the 2026-09-23 import-lock build** (home PC 16:33 over
-  SSH, laptop 16:37; installer SHA-256 `08A4E00B…80F0`). **Never run an installer
+- **Installed builds (2026-09-29):** home PC = the `dbbe656` build (17:50 over SSH;
+  installer `Downloads\CreatorStudio-Setup-2.0.0-2026-09-29.exe`, SHA-256
+  `D1B10AB4…F4E6`, exe `2DE54ACE…4DF2`). Laptop = the 2026-09-23 import-lock build
+  (installer SHA-256 `08A4E00B…80F0`): the 09-29 build went on at 17:45, Smart App
+  Control refused to start it, and the 09-23 one was put back at 17:49 (Run / build).
+  **Never run an installer
   while an import is copying** — it kills `CreatorStudio.exe` and the copy dies
   mid-file. How to tell: `GET http://127.0.0.1:5015/api/osmo/active` on that
   machine (non-null job = busy), and on the home PC `Get-SmbOpenFile` lists any
@@ -265,9 +288,10 @@ Inno Setup went in **per-user**, so `ISCC.exe` is at
   **`$env:COMPUTERNAME\omrii`**, then delete the task. ⚠️ Over SSH,
   `$env:USERDOMAIN` is `WORKGROUP`, and a task registered for that account
   silently never runs. Verify with `GET /api/osmo/active` (only new builds have it).
-- **Works there:** detection, copy, merge, and **`vps` transcription** — since
-  2026-09-29 from the laptop's own davinci-automation checkout (before: the home
-  PC's retired `E:\` copies over SMB), under the laptop's `py -3.10`. ⚠️ That
+- **Works there:** detection, copy, merge, and **`vps` transcription** — through
+  the home PC's retired `E:\` copies over SMB while the laptop stays on the 09-23
+  build (Smart App Control, Run / build); a build from `dbbe656` on uses the
+  laptop's own davinci-automation checkout. Either runs under the laptop's `py -3.10`. ⚠️ That
   interpreter needs **`requests`** (`py -3.10 -m pip install
   requests`): without it every transcription fails with `ModuleNotFoundError`
   after three retries. It was missing until 2026-09-23 17:53, so the earlier
