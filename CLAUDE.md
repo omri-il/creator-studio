@@ -61,7 +61,7 @@ polls — the exact `jobs.py` pattern from **video-prep**.
 |---|---|
 | `tracker.py` | Entry point: Flask thread + `MicMonitor` + camera watcher + tray + pywebview window. |
 | `server.py` | Flask app — serves `web/` and the JSON API. |
-| `settings_store.py` | Shared paths, `settings.json` (in `%LOCALAPPDATA%\StudioFlow`), ffmpeg resolution, app constants. |
+| `settings_store.py` | Shared paths (incl. `DAVINCI_AUTOMATION_DIR` — see "davinci-automation's scripts"), `settings.json` (in `%LOCALAPPDATA%\StudioFlow`), ffmpeg resolution, app constants. |
 | `mediatools.py` | `probe` (+ `creation_time`), recursive `find_videos`, lossless `join` (concat demuxer + `-c copy`) + progress. Ported from video-prep `fftools.py`. |
 | `osmo_import.py` | Camera detect, DCIM scan (skip `.LRF`/`.SRT`), **session grouping**, idempotent copy, import orchestration (copy → merge → transcribe). |
 | `mic.py` | `get/set_mic_volume`, headless `MicMonitor` (silent lock loop). |
@@ -74,6 +74,7 @@ polls — the exact `jobs.py` pattern from **video-prep**.
 | `publish_vsl.py` | The CLI. `--latest`, `--pick`, `--event`, `--dry-run`; copies the link to the clipboard. |
 | `tests/test_osmo.py` | Unit tests for the pure grouping/timeline/manifest logic, `plan_dest`, `.part` copies, and the per-clip manifest. |
 | `tests/test_osmo_lock.py` | The one-import-at-a-time rule, through the real Flask routes (workers stubbed to block). |
+| `tests/test_transcribe.py` | Scripts come from the davinci-automation checkout; backend → `--engine`; the error tail; a timeout ends the whole process chain (a fake `transcribe_auto.py`, real processes). |
 | `tests/test_wistia.py` · `test_publish_vsl.py` · `test_vsl_routes.py` | The VSL pipeline, network stubbed throughout. |
 
 ## How session grouping works (the "smart merge")
@@ -125,16 +126,51 @@ Three rules now, each load-bearing:
   `video-prep/fftools.py` — `mediatools.join` carries it so the packaged `.exe` is
   self-contained (no second process). If strict de-dup is wanted later, extract a
   shared helper.
-- Transcription **shells out** to one of two davinci-automation CLIs, chosen by
-  the `transcribe_backend` setting (default **`vps`**):
-  - **`vps`** (default) → `transcribe_via_vps.py <mp4> --output <dest>\<stem>.srt` —
-    extracts a tiny 32 kbps MP3 and uploads it to the **whisper-agent** on the VPS
-    (Tailscale `100.94.153.60:8080`, OpenAI Whisper, uses credits, no GPU here).
-    Produces the `.srt` only.
-  - **`local`** → `transcribe-hebrew.py <mp4> --output-dir <dest>` — GPU on this PC
-    (ivrit-ai model; also writes `_transcription.txt`/`.json`/`_fillers.txt`).
-  Routing lives in `osmo_import._run_transcribe`; both are picked in the import
-  screen (segmented toggle) and via `POST /api/osmo/config`.
+- Transcription **shells out** to davinci-automation's ONE entry point,
+  `scripts\transcription\transcribe_auto.py <mp4> --output <dest>\<stem>.srt
+  --engine vps|local`, in that repo's checkout (next section). Its own rule is
+  "never call an engine script directly from a pipeline" — so never call
+  `transcribe_via_vps.py` / `transcribe-hebrew.py` from here. The
+  `transcribe_backend` setting (default **`vps`**) picks the engine:
+  - **`vps`** (default) → `--engine vps` — the VPS **whisper-agent** only: a tiny
+    32 kbps MP3 goes up to Tailscale `100.94.153.60:8080` (OpenAI Whisper, uses
+    credits, no GPU here).
+  - **`local`** → `--engine local` — ivrit-ai on this PC's GPU, then on its CPU if the
+    GPU run fails (slow: on a multi-hour Osmo file, hours).
+  Either way only the `.srt` is written (ivrit-ai's cues re-cut short, like the VPS's).
+  The `_transcription.txt/.json/_fillers.txt` the direct `transcribe-hebrew.py` call
+  used to leave beside the video are gone since 2026-09-29 — nothing here read them.
+  Routing lives in `osmo_import.transcribe_cmd` / `_run_transcribe`; both are picked
+  in the import screen (segmented toggle) and via `POST /api/osmo/config`. An
+  "automatic" (VPS, then local) choice would be `--engine auto` — not offered.
+
+## davinci-automation's scripts come from its checkout (2026-09-29)
+
+`settings_store.DAVINCI_AUTOMATION_DIR` = `~\Projects\davinci-automation` — the
+same `C:\Users\omrii\Projects\davinci-automation` on the home PC and the laptop.
+Transcription (`osmo_import`) and the DaVinci tile (`davinci.NEW_PROJECT_SCRIPT` /
+`IMPORT_PROXY_SCRIPT`, which also decide whether the tile shows) take their scripts
+from there. **Never `E:\DaVinci Automation\scripts\`**: that mirror was retired
+2026-09-06 (davinci-automation's CLAUDE.md) and only kept stale copies — it never
+had `transcribe_auto.py`, and its `transcribe_via_vps.py` kept the dead public-IP
+fallback the checkout dropped (davinci-automation `cf7d728`). Until 2026-09-29
+Creator Studio still ran those copies on both machines (the laptop over SMB).
+- **A machine runs whatever its davinci-automation checkout has.** The dashboard's
+  "עדכון הדשבורד" button (or `git pull --ff-only` there) updates it; nothing in this
+  repo needs rebuilding for a change to those scripts.
+- **The installed app runs the code it was BUILT from.** Both machines run
+  `C:\Program Files\Creator Studio\CreatorStudio.exe`; PyInstaller compiles every
+  path constant into it (read back 2026-09-29: the 2026-09-23 build still said
+  `E:\DaVinci Automation\...`). So a change here reaches a machine only through a
+  rebuild + reinstall (Run / build, Laptop install) — `git pull` changes nothing
+  that runs. The same goes for `dist\CreatorStudio`: stale until the next build.
+- **The time limit must end the whole chain:** the app → `transcribe_auto.py` → the
+  engine → ffmpeg. `subprocess.run(timeout=…)` kills only the first and then waits
+  for the rest, which hold the output pipe (a 3 s limit waited 20 s in a test).
+  `_kill_tree` runs `taskkill /F /T`. The chain's output is one UTF-8 pipe
+  (`PYTHONIOENCODING`, `PYTHONUNBUFFERED`, stderr folded in), and `_error_tail`
+  drops `transcribe_auto.py`'s generic "every transcription engine failed" line so
+  the done screen's 200 characters are the engine's own reason.
 
 ## Run / build
 - **Dev:** `run.bat` → opens the window (`py -3.10 tracker.py`). Server: `localhost:5015`.
@@ -219,13 +255,15 @@ Inno Setup went in **per-user**, so `ISCC.exe` is at
   **`$env:COMPUTERNAME\omrii`**, then delete the task. ⚠️ Over SSH,
   `$env:USERDOMAIN` is `WORKGROUP`, and a task registered for that account
   silently never runs. Verify with `GET /api/osmo/active` (only new builds have it).
-- **Works there:** detection, copy, merge, and **`vps` transcription** — the
-  davinci-automation script is reached over `E:` and runs under the laptop's
-  `py -3.10`. ⚠️ That interpreter needs **`requests`** (`py -3.10 -m pip install
+- **Works there:** detection, copy, merge, and **`vps` transcription** — since
+  2026-09-29 from the laptop's own davinci-automation checkout (before: the home
+  PC's retired `E:\` copies over SMB), under the laptop's `py -3.10`. ⚠️ That
+  interpreter needs **`requests`** (`py -3.10 -m pip install
   requests`): without it every transcription fails with `ModuleNotFoundError`
   after three retries. It was missing until 2026-09-23 17:53, so the earlier
-  "verified" note did not cover a real run. Installed and re-run then. **Home-PC only:** `local` GPU transcription
-  and the DaVinci tiles.
+  "verified" note did not cover a real run. Installed and re-run then. `local`
+  there has no NVIDIA GPU, so it runs on the CPU (hours for a long clip) — use `vps`.
+  **Home-PC only:** the DaVinci tiles' Resolve work.
 
 ## VSL publishing (Wistia → Event-Engine)
 
@@ -307,8 +345,8 @@ the build — and urllib is what gives the streaming control above.
   audio >24 MB into 10-min chunks and stitches the result. So even multi-hour Osmo
   recordings transcribe fine via `vps` (verified: the 2h46m file's full transcript
   came back). No local size handling needed.
-- **Local backend teardown crash (cosmetic):** on long footage `transcribe-hebrew.py`
-  finishes and writes the `.srt`/`.txt`/`.json` correctly, then the process can crash
-  on CUDA/interpreter teardown with exit `0xC0000409` — a *false negative*. The
-  outputs are valid. Another reason `vps` is the default. If reviving heavy use of
-  `local`, treat "`.srt` exists" as success rather than trusting the exit code.
+- **Local backend teardown crash (handled since 2026-09-29):** on long footage
+  `transcribe-hebrew.py` finishes and writes its outputs correctly, then the process
+  can crash on CUDA/interpreter teardown with exit `0xC0000409` — a *false negative*.
+  `transcribe_auto.py` keeps a complete, non-empty SRT whatever the exit code, so
+  through it such a run counts as success.

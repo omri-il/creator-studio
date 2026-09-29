@@ -19,12 +19,13 @@ import ctypes
 import os
 import re
 import shutil
+import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
 
 import mediatools
-from settings_store import get_setting, set_setting
+from settings_store import get_setting, set_setting, DVCC_SCRIPTS_DIR
 
 # Sidecars the camera writes next to each real clip — never transferred.
 SKIP_EXTS = {".lrf", ".srt", ".thm", ".gif"}
@@ -305,18 +306,30 @@ def scan_source(source_dir: str, backup_root: str | None = None) -> dict:
 # IO — import orchestration (copy → merge → transcribe)
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Two transcription backends, both shelled out to (one truth: the scripts live in
-# davinci-automation). Default is the VPS whisper-agent (Omri's preference,
-# 2026-07-03) — it uses OpenAI Whisper on the VPS (credits), needs no GPU here, and
-# handles the huge Osmo files by uploading a tiny 32 kbps MP3. 'local' is the
-# on-PC GPU path (ivrit-ai model) — offline, no credits, but ties up the GPU.
-_TRANSCRIBE_DIR = r"E:\DaVinci Automation\scripts\transcription"
-TRANSCRIBE_SCRIPT_LOCAL = os.path.join(_TRANSCRIBE_DIR, "transcribe-hebrew.py")
-TRANSCRIBE_SCRIPT_VPS = os.path.join(_TRANSCRIBE_DIR, "transcribe_via_vps.py")
-HAS_TRANSCRIBE_LOCAL = os.path.isfile(TRANSCRIBE_SCRIPT_LOCAL)
-HAS_TRANSCRIBE_VPS = os.path.isfile(TRANSCRIBE_SCRIPT_VPS)
+# Transcription shells out to davinci-automation's ONE entry point,
+# transcribe_auto.py, in that repo's checkout on this machine (settings_store —
+# never the retired E:\ mirror, which kept stale copies and had no transcribe_auto).
+# Its own rule: "never call an engine script directly from a pipeline". The two
+# backends of the import screen map onto its --engine flag:
+#   'vps'   → --engine vps   — the VPS whisper-agent only. The default (Omri's
+#             preference, 2026-07-03): OpenAI Whisper on the VPS (credits), no GPU
+#             here, and the huge Osmo files go up as a tiny 32 kbps MP3.
+#   'local' → --engine local — ivrit-ai on this PC's GPU, then its CPU if the GPU
+#             run fails. Offline, no credits, but ties up the machine.
+# Both write just <dest>\<stem>.srt.
+TRANSCRIBE_DIR = os.path.join(DVCC_SCRIPTS_DIR, "transcription")
+TRANSCRIBE_SCRIPT = os.path.join(TRANSCRIBE_DIR, "transcribe_auto.py")
+_PY = ["py", "-3.10"]
+HAS_TRANSCRIBE_LOCAL = (os.path.isfile(TRANSCRIBE_SCRIPT)
+                        and os.path.isfile(os.path.join(TRANSCRIBE_DIR, "transcribe-hebrew.py")))
+HAS_TRANSCRIBE_VPS = (os.path.isfile(TRANSCRIBE_SCRIPT)
+                      and os.path.isfile(os.path.join(TRANSCRIBE_DIR, "transcribe_via_vps.py")))
 HAS_TRANSCRIBE = HAS_TRANSCRIBE_LOCAL or HAS_TRANSCRIBE_VPS
 DEFAULT_TRANSCRIBE_BACKEND = "vps"
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+# transcribe_auto.py's closing line on every failure — says nothing the engine's own
+# lines above it don't, so it is dropped from the error the done screen shows.
+_AUTO_GAVE_UP = "ERROR: every transcription engine failed"
 
 # Retry knobs. A fast transient failure is retried; a genuine timeout is NOT (a
 # long recording — retrying would burn hours). Transients differ by backend: the
@@ -342,28 +355,60 @@ def backend_available(backend: str) -> bool:
     return HAS_TRANSCRIBE_VPS if backend == "vps" else HAS_TRANSCRIBE_LOCAL
 
 
-def _run_transcribe(vid: str, dest_dir: str, backend: str) -> tuple[str, str]:
-    """Run one transcription via the chosen backend ('vps' | 'local'). Both write a
-    `<stem>.srt` into dest_dir. Returns (status, err_tail), status ∈ 'ok'|'fail'|'timeout'."""
-    import subprocess
+def transcribe_cmd(vid: str, dest_dir: str, backend: str) -> list[str]:
+    """The transcribe_auto.py command for one file → `<dest_dir>\\<stem>.srt`."""
     stem = os.path.splitext(os.path.basename(vid))[0]
-    if backend == "vps":
-        cmd = ["py", "-3.10", TRANSCRIBE_SCRIPT_VPS, vid,
-               "--output", os.path.join(dest_dir, stem + ".srt")]
-    else:
-        cmd = ["py", "-3.10", TRANSCRIBE_SCRIPT_LOCAL, vid, "--output-dir", dest_dir]
+    return [*_PY, TRANSCRIBE_SCRIPT, vid,
+            "--output", os.path.join(dest_dir, stem + ".srt"),
+            "--engine", "vps" if backend == "vps" else "local"]
+
+
+def _error_tail(out: str) -> str:
+    """What went wrong, in the engine's own words (transcribe_auto's generic closing
+    line dropped), so the ~200 characters the done screen shows are the reason."""
+    lines = [ln for ln in (out or "").splitlines()
+             if ln.strip() and not ln.startswith(_AUTO_GAVE_UP)]
+    return "\n".join(lines).strip()
+
+
+def _kill_tree(p: subprocess.Popen) -> None:
+    """End transcribe_auto.py AND the engine + ffmpeg it started. A plain kill ends
+    only the first; the rest would run on, and hold the output pipe open, so reading
+    it would wait for them — the timeout would not stop anything."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)],
+                       capture_output=True, creationflags=_NO_WINDOW)
     try:
-        r = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=TRANSCRIBE_TIMEOUT,
-            creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
-        )
-    except subprocess.TimeoutExpired:
-        return "timeout", "התמלול חרג מזמן מרבי"
+        p.kill()
+    except OSError:
+        pass
+
+
+def _run_transcribe(vid: str, dest_dir: str, backend: str) -> tuple[str, str]:
+    """Run one transcription via the chosen backend ('vps' | 'local') → a `<stem>.srt`
+    in dest_dir. Returns (status, err_tail), status ∈ 'ok'|'fail'|'timeout'."""
+    # Every Python in the chain writes UTF-8, unbuffered, into ONE pipe — so the
+    # output decodes (Hebrew, ✅) and reads in the order it happened.
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
+    try:
+        p = subprocess.Popen(
+            transcribe_cmd(vid, dest_dir, backend), stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, encoding="utf-8", errors="replace", env=env,
+            creationflags=_NO_WINDOW)
     except Exception as e:  # noqa: BLE001
         return "fail", str(e)
-    if r.returncode == 0:
+    try:
+        out, _ = p.communicate(timeout=TRANSCRIBE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        _kill_tree(p)
+        try:
+            p.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            pass
+        return "timeout", "התמלול חרג מזמן מרבי"
+    if p.returncode == 0:
         return "ok", ""
-    return "fail", (r.stderr or r.stdout or "").strip()
+    return "fail", _error_tail(out)
 
 
 def transcribe_one(vid: str, dest_dir: str, backend: str | None = None,

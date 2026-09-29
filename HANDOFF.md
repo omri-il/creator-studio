@@ -53,6 +53,8 @@ and file map live in [CLAUDE.md](CLAUDE.md) — this is only the state + next st
 > OFF (it corrupts WebView2/.NET DLLs). Reuse points: lossless merge mirrors
 > `video-prep/fftools.py`; transcription shells out to
 > `E:\DaVinci Automation\scripts\transcription\transcribe-hebrew.py`.
+> *(Outdated since 2026-09-29: davinci-automation's checkout, `transcribe_auto.py` —
+> see CLAUDE.md → "davinci-automation's scripts come from its checkout".)*
 >
 > Tell me which of the open items you want to tackle first.
 

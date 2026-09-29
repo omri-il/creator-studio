@@ -8,18 +8,18 @@ import os
 import subprocess
 import time
 
-from settings_store import get_setting, set_setting, _RES_DIR
+from settings_store import (get_setting, set_setting, _RES_DIR,
+                            DAVINCI_AUTOMATION_DIR, DVCC_SCRIPTS_DIR)
 
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
-# Paths only present on the home PC — features light up when they exist.
-NEW_PROJECT_SCRIPT = r"E:\DaVinci Automation\scripts\utils\new_project.py"
-IMPORT_PROXY_SCRIPT = r"E:\DaVinci Automation\scripts\utils\import_and_proxy.py"
+# davinci-automation's checkout (settings_store) — features light up when they exist.
+NEW_PROJECT_SCRIPT = os.path.join(DVCC_SCRIPTS_DIR, "utils", "new_project.py")
+IMPORT_PROXY_SCRIPT = os.path.join(DVCC_SCRIPTS_DIR, "utils", "import_and_proxy.py")
 DEFAULT_BASE = r"E:\Video Projects"
 HAS_DAVINCI = os.path.isfile(NEW_PROJECT_SCRIPT)
 
-DASHBOARD_RUNBAT = os.path.join(
-    os.path.expanduser("~"), "Projects", "davinci-automation", "control", "run.bat")
+DASHBOARD_RUNBAT = os.path.join(DAVINCI_AUTOMATION_DIR, "control", "run.bat")
 DASHBOARD_URL = "http://127.0.0.1:5007/"
 HAS_DASHBOARD = os.path.isfile(DASHBOARD_RUNBAT)
 _CONTROL_DIR = os.path.dirname(DASHBOARD_RUNBAT)

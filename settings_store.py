@@ -48,6 +48,14 @@ ENV_FILE = os.path.join(_USER_DIR, ".env")
 # Where the web UI assets live (bundled under _internal/web when frozen).
 WEB_DIR = os.path.join(_RES_DIR, "web")
 
+# davinci-automation's git checkout — the ONLY place its scripts run from, on the
+# home PC and the laptop alike (~\Projects\davinci-automation on both). Never the
+# old E:\DaVinci Automation\scripts mirror: retired 2026-09-06, it goes stale, and
+# on the laptop E: is the home PC's drive over SMB.
+DAVINCI_AUTOMATION_DIR = os.path.join(
+    os.path.expanduser("~"), "Projects", "davinci-automation")
+DVCC_SCRIPTS_DIR = os.path.join(DAVINCI_AUTOMATION_DIR, "scripts")
+
 
 def _resolve_ffmpeg() -> str:
     """Pick an ffmpeg binary, preferring one bundled next to the app.
