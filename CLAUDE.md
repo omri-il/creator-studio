@@ -178,8 +178,8 @@ Inno Setup went in **per-user**, so `ISCC.exe` is at
 - **Home-PC drives on the laptop** come from `laptop-setup\map-video-drive.ps1`
   (scheduled task `MapVideoDrive`, every 2 min, runs from the main checkout's
   `laptop-setup\`): home `E:` → **`E:`** (same letter, so `E:\…` paths resolve
-  identically) and home `D:` → **`S:`** (laptop `D:` is taken; `S:` is the letter
-  the Surface used). Shares are Remote-HDD's `DriveE`/`DriveD`, `netshare` creds
+  identically) and home `D:` → **`S:`** (laptop `D:` is taken; `S:` is Remote-HDD's
+  own letter for home `D:`). Shares are Remote-HDD's `DriveE`/`DriveD`, `netshare` creds
   stored via `cmdkey`.
 - **`osmo_backup_root` on the laptop** is set in `%LOCALAPPDATA%\StudioFlow\settings.json`
   — never leave it on the `D:\…` default there.
