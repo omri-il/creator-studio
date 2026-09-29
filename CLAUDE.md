@@ -171,6 +171,16 @@ Creator Studio still ran those copies on both machines (the laptop over SMB).
   (`PYTHONIOENCODING`, `PYTHONUNBUFFERED`, stderr folded in), and `_error_tail`
   drops `transcribe_auto.py`'s generic "every transcription engine failed" line so
   the done screen's 200 characters are the engine's own reason.
+- **Verified 2026-09-29 on the home PC** (the new code, a 20 s cut of a real Osmo
+  clip, the checkout at `cf7d728`): `vps` 22 s and `local` 12 s (GPU), each a Hebrew
+  `.srt` and nothing else; a missing file → `ERROR: file not found: …` as the error.
+- ⚠️ **`local` cannot run from an SSH session on the home PC** as is:
+  `C:\Users\omrii\.cache\huggingface` is a junction to `E:\cache\huggingface`, and
+  Windows refuses a junction inside an SSH session ("The path cannot be traversed
+  because it contains an untrusted mount point"; Python sees `OSError: [Errno 22]
+  Invalid argument: …\huggingface\token`, GPU and CPU alike). The app, in Omri's
+  desktop session, is not affected. For an SSH test set `HF_HOME=E:\cache\huggingface`
+  (the same files, no junction).
 
 ## Run / build
 - **Dev:** `run.bat` → opens the window (`py -3.10 tracker.py`). Server: `localhost:5015`.
