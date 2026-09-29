@@ -228,7 +228,15 @@ Inno Setup went in **per-user**, so `ISCC.exe` is at
   own letter for home `D:`). Shares are Remote-HDD's `DriveE`/`DriveD`, `netshare` creds
   stored via `cmdkey`.
 - **`osmo_backup_root` on the laptop** is set in `%LOCALAPPDATA%\StudioFlow\settings.json`
-  — never leave it on the `D:\…` default there.
+  (`S:\DJI Pocket Archive`) — never leave it on the `D:\…` default there.
+  🚨 **Never write or read that file straight from a Claude desktop session.** Programs the session
+  starts run inside Claude's MSIX package, and a file they CREATE under `%LOCALAPPDATA%` / `%APPDATA%`
+  lands in Claude's hidden `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\…`. Later reads
+  from a session show that copy, and the installed app never sees it. That happened here: the
+  2026-09-23 setting existed only in the hidden copy, so the real app ran on the `D:\` default until
+  2026-09-29, when the file was copied into the real folder. Use the app's import screen, or a one-off
+  scheduled task (smoothzoom CLAUDE.md → Install / update, "From a Claude desktop session"), and read
+  it back the same way. Running `run.bat` from a session has the same problem.
 - ✅ **Both installs run the 2026-09-23 import-lock build** (home PC 16:33 over
   SSH, laptop 16:37; installer SHA-256 `08A4E00B…80F0`). **Never run an installer
   while an import is copying** — it kills `CreatorStudio.exe` and the copy dies
