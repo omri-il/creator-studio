@@ -77,6 +77,30 @@ def _pick(kind: str):
 
 
 # ── camera watcher (background thread) ────────────────────────────────────────
+def _notify(message: str, title: str) -> None:
+    try:
+        if TRAY is not None:
+            TRAY.notify(message, title)
+    except Exception:
+        pass
+
+
+def _auto_import_done(result, error):
+    """The end of an import the camera started by itself: one notification."""
+    if error:
+        _notify(f"פתח את Creator Studio לפרטים. ({error[:120]})", "⚠️ הייבוא נכשל")
+        return
+    copied = len((result or {}).get("copied") or [])
+    errors = (result or {}).get("errors") or []
+    if errors:
+        _notify(f"{copied} קבצים הועתקו, {len(errors)} נכשלו. פתח את Creator Studio.",
+                "⚠️ הייבוא הסתיים עם שגיאות")
+    elif copied:
+        _notify(f"{copied} קבצים חדשים בארכיון. אפשר לנתק את המצלמה.", "✅ הייבוא הסתיים")
+    else:
+        _notify("כל הקבצים במצלמה כבר יובאו. אפשר לנתק אותה.", "✅ אין קבצים חדשים")
+
+
 def _camera_watcher():
     import osmo_import
     last = None
@@ -88,13 +112,22 @@ def _camera_watcher():
             drives = []
         root = drives[0]["root"] if drives else None
         if root and root != last:
-            # New camera plugged in → notify + surface the window (review-then-confirm).
-            name = "DJI Osmo" if drives[0].get("is_dji") else "מצלמה"
-            try:
-                if TRAY is not None:
-                    TRAY.notify(f"{name} מחוברת — פתח את Creator Studio לייבוא", "📷 זוהתה מצלמה")
-            except Exception:
-                pass
+            # New camera plugged in. A DJI one starts its import by itself (2026-10-19); the
+            # window opens on its progress. Anything else (or auto off, or the backup folder's
+            # drive missing) is the old review-then-Start.
+            d = drives[0]
+            name = "DJI Osmo" if d.get("is_dji") else "מצלמה"
+            why = "off"
+            if d.get("is_dji"):
+                _jid, why = server_mod.start_auto_import(d.get("dcim") or root, camera_root=root,
+                                                         on_done=_auto_import_done)
+            if why is None:
+                _notify("הקבצים מועתקים לארכיון. אין צורך ללחוץ על כלום.", f"📥 מייבא מה-{name}")
+            elif why == "unreachable":
+                _notify("תיקיית הגיבוי לא זמינה עכשיו. פתח את Creator Studio לבחור יעד.",
+                        "📷 זוהתה מצלמה")
+            elif why != "busy":
+                _notify(f"{name} מחוברת. פתח את Creator Studio לייבוא", "📷 זוהתה מצלמה")
             _show_window()
         last = root
         time.sleep(4)

@@ -11,8 +11,10 @@ screen-first successor to the old tray-only "Studio Flow" (renamed in-app to
 > `mv mic-volume-tracker creator-studio`.)
 
 ## What it does
-- **Osmo import (the reason it exists):** plug in the camera → a notification +
-  the window opens → review the auto-detected **sessions** → Start. It copies the
+- **Osmo import (the reason it exists):** plug in the camera → **the import starts
+  by itself** (since 2026-10-19, "Plug in and it imports" below) and the window
+  opens on its progress; with that switched off, review the auto-detected
+  **sessions** → Start. It copies the
   full-quality `.MP4`s (skips the `.LRF` proxy + `.SRT` sidecar) to a dated folder,
   **losslessly merges** clips the camera auto-split into one recording, and
   optionally **transcribes Hebrew**. Never re-copies an already-imported clip.
@@ -120,6 +122,30 @@ Three rules now, each load-bearing:
   truncated files under the real name** (e.g. `2026-09-22` has a 0-byte `…0064_D.MP4`).
   The new code never overwrites them (it copies to `_<size>` beside them); clean
   them up by hand after comparing sizes with the card.
+
+## Plug in and it imports (2026-10-19)
+
+Omri: "connect the camera, transfer the files, go to a DaVinci dashboard, choose
+the file… many actions". The camera watcher (`tracker._camera_watcher`) now calls
+`server.start_auto_import()` when a **DJI** camera appears (any other card keeps
+review-then-Start): the same `run_import`, the import view's defaults
+(`osmo_import.auto_options`: merge, transcribe with the saved engine, keep
+originals), through the same one-import lock (`busy` while one runs). A tray
+notification when it starts and one when it ends (copied / nothing new / errors);
+the window opens and attaches to the running job (`app.js` checks
+`/api/osmo/active` when a camera appears). On the home PC davinci-automation's
+**Workshop watch** then pairs the take with the OBS recording within ten minutes.
+
+- **The switch** "ייבוא אוטומטי כשמחברים את ה-Osmo" on the import view
+  (`osmo_auto_import`, default on; `POST /api/osmo/config {"auto_import"}`).
+- 🚨 **Never into a backup folder whose drive is missing or IS the camera**
+  (`backup_root_usable`): the laptop's `S:` is gone away from home, and there the
+  Osmo can take a letter the setting points at. Then it only notifies and opens
+  the window, as before.
+- ⚠️ With this on, **an installer run while the camera is plugged in can kill a
+  copy** that started by itself: check `/api/osmo/active` first (see "Laptop
+  install").
+- Tests: `tests/test_auto_import.py`.
 
 ## Reuse (one truth per topic)
 - Lossless merge command is the same concat-demuxer `-c copy` as

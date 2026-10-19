@@ -247,6 +247,38 @@ def get_backup_root() -> str:
     return get_setting("osmo_backup_root", DEFAULT_BACKUP_ROOT)
 
 
+def auto_import_enabled() -> bool:
+    """Plugging the Osmo in starts the import by itself (Omri, 2026-10-19: "connect the camera,
+    transfer the files, go to a dashboard, choose the file… many actions"). On unless switched
+    off in the import view."""
+    return bool(get_setting("osmo_auto_import", True))
+
+
+def set_auto_import(on: bool) -> None:
+    set_setting("osmo_auto_import", bool(on))
+
+
+def auto_options() -> dict:
+    """What an import started by plugging the camera in does: the import view's defaults."""
+    return {"merge": True, "transcribe": True, "transcribe_backend": None,
+            "keep_originals": True, "backup_root": None}
+
+
+def backup_root_usable(backup_root: str, camera_root: str = "") -> bool:
+    """Whether an automatic import may copy into `backup_root`: its drive is there (the laptop's
+    S: is a network share that is gone away from home) and is not the camera itself (away from
+    home the Osmo can take the letter the project drive normally has, 2026-10-14). The import
+    view still lets a person choose anything by hand."""
+    if not backup_root:
+        return False
+    anchor = os.path.splitdrive(os.path.abspath(backup_root))[0]
+    if not anchor:
+        return False
+    if camera_root and anchor.upper() == os.path.splitdrive(camera_root)[0].upper():
+        return False
+    return os.path.isdir(anchor + "\\")
+
+
 def set_backup_root(path: str) -> None:
     set_setting("osmo_backup_root", path)
 

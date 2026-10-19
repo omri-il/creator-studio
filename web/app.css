@@ -138,6 +138,7 @@ main{max-width:980px;margin:0 auto;padding:34px 26px 80px;position:relative;z-in
 .mono{font-family:"JetBrains Mono";font-size:12.5px}
 .destline{margin-top:13px;color:var(--muted);font-size:13px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .destline .mono{color:var(--teal)}
+.autoline{margin-top:12px;font-size:13px;color:var(--muted)}
 
 /* sessions */
 .sessions-head{display:flex;align-items:baseline;justify-content:space-between;margin:4px 2px 12px}

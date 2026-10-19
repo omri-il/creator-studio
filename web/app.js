@@ -96,6 +96,12 @@ async function detectDrives() {
         `נמצאה מצלמה בכונן <span class="mono">${d.root}</span>${d.label ? " · " + d.label : ""}`;
       if (!$("#sourcePath").value) $("#sourcePath").value = d.dcim || d.root;
     }
+    // Plugged in and the import already started by itself (2026-10-19): show its progress.
+    if (d.root !== state.lastDrive) {
+      let a = null;
+      try { a = await api("/api/osmo/active"); } catch (e) {}
+      if (a && a.job) { state.lastDrive = d.root; showImport(); return; }
+    }
     // toast (once per connect)
     if (d.root !== state.lastDrive && !state.toastDismissed &&
         $("#view-home").classList.contains("hidden") === false) {
@@ -123,6 +129,7 @@ async function loadDest() {
     $("#destPath").textContent = c.backup_root + "\\<תאריך>";
     $("#destPath").dataset.root = c.backup_root;
     if (c.transcribe_backend) setTxBackend(c.transcribe_backend, false);
+    if ("auto_import" in c) $("#optAuto").checked = !!c.auto_import;
   } catch (e) {}
 }
 async function editRoot() {
@@ -561,6 +568,7 @@ async function init() {
     if (p && p.ok && p.path) $("#sourcePath").value = p.path;
   };
   $("#editRootBtn").onclick = editRoot;
+  $("#optAuto").onchange = (e) => post("/api/osmo/config", { auto_import: e.target.checked });
   $("#startImportBtn").onclick = startImport;
   document.querySelectorAll("#txSeg .seg-btn").forEach((b) =>
     b.addEventListener("click", () => setTxBackend(b.dataset.backend, true)));

@@ -162,6 +162,41 @@ def api_osmo_import():
     return jsonify({"ok": True, "id": jid})
 
 
+def start_auto_import(source: str, camera_root: str = "", on_done=None):
+    """The import a plugged-in Osmo starts by itself (2026-10-19), through the same one-at-a-time
+    lock as the Start button. Returns (job id, None) or (None, why): "off" (switched off),
+    "unreachable" (the backup folder's drive is not there, or is the camera), "busy" (an import
+    already runs; the window shows it). `on_done(result, error)` is called when it ends."""
+    if not osmo_import.auto_import_enabled():
+        return None, "off"
+    if not osmo_import.backup_root_usable(osmo_import.get_backup_root(), camera_root):
+        return None, "unreachable"
+    options = osmo_import.auto_options()
+
+    def work(update):
+        try:
+            result = osmo_import.run_import(source, options,
+                                            progress=lambda pct, msg: update(pct, msg))
+        except Exception as e:
+            if on_done:
+                try:
+                    on_done(None, str(e))
+                except Exception:
+                    pass
+            raise
+        if on_done:
+            try:
+                on_done(result, None)
+            except Exception:
+                pass
+        return result
+    try:
+        jid = jobs.run(work, kind=OSMO_IMPORT, exclusive=(OSMO_IMPORT,))
+    except jobs.JobBusy:
+        return None, "busy"
+    return jid, None
+
+
 @app.route("/api/osmo/transcribe", methods=["POST"])
 def api_osmo_transcribe():
     """(Re)transcribe already-imported files — used when the import's transcription
@@ -192,8 +227,11 @@ def api_osmo_config():
             osmo_import.set_backup_root(data["backup_root"])
         if data.get("transcribe_backend"):
             osmo_import.set_transcribe_backend(data["transcribe_backend"])
+        if "auto_import" in data:
+            osmo_import.set_auto_import(bool(data["auto_import"]))
     return jsonify({"backup_root": osmo_import.get_backup_root(),
-                    "transcribe_backend": osmo_import.get_transcribe_backend()})
+                    "transcribe_backend": osmo_import.get_transcribe_backend(),
+                    "auto_import": osmo_import.auto_import_enabled()})
 
 
 # ── davinci + tools ───────────────────────────────────────────────────────────
