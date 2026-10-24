@@ -3,6 +3,7 @@
 #   home E: -> E:  (same letter, so E:\Video Projects\... paths resolve identically)
 #   home D: -> S:  (the laptop's own D: is its card-reader slot; S: matches the
 #                   letter the Surface used, see Remote-HDD)
+#   home F: -> F:  (the 1 TB "HDD", shared as DriveF since 2026-10-24)
 # Log: map-video-drive.log, written next to this script.
 
 $HomePcIp   = "100.111.186.101"
@@ -12,6 +13,7 @@ $HomePcIp   = "100.111.186.101"
 $Mappings = [ordered]@{
     "E" = "\\$HomePcIp\DriveE"
     "S" = "\\$HomePcIp\DriveD"
+    "F" = "\\$HomePcIp\DriveF"
 }
 $LogFile    = "$PSScriptRoot\map-video-drive.log"
 $MaxLogLines = 50

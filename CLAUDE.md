@@ -251,8 +251,8 @@ Inno Setup went in **per-user**, so `ISCC.exe` is at
   (scheduled task `MapVideoDrive`, every 2 min, runs from the main checkout's
   `laptop-setup\`): home `E:` → **`E:`** (same letter, so `E:\…` paths resolve
   identically) and home `D:` → **`S:`** (laptop `D:` is taken; `S:` is Remote-HDD's
-  own letter for home `D:`). Shares are Remote-HDD's `DriveE`/`DriveD`, `netshare` creds
-  stored via `cmdkey`.
+  own letter for home `D:`), and since 2026-10-24 home `F:` (the 1 TB HDD) → **`F:`**.
+  Shares are Remote-HDD's `DriveE`/`DriveD`/`DriveF`, `netshare` creds stored via `cmdkey`.
 - **`osmo_backup_root` on the laptop** is set in `%LOCALAPPDATA%\StudioFlow\settings.json`
   (`S:\DJI Pocket Archive`) — never leave it on the `D:\…` default there.
   🚨 **Never write or read that file straight from a Claude desktop session.** Programs the session
