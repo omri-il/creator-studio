@@ -56,12 +56,35 @@ try {
     }
 
     # ---- 1. find the mic -------------------------------------------------------
-    $mics = @()
-    foreach ($d in [System.IO.DriveInfo]::GetDrives()) {
-        if ($d.DriveType -ne 'Removable' -or -not $d.IsReady) { continue }
-        $dirs = @(Get-ChildItem -LiteralPath $d.RootDirectory.FullName -Directory -Filter 'TX_MIC*' -ErrorAction SilentlyContinue)
-        if ($dirs.Count -gt 0) { $mics += [pscustomobject]@{ Root = $d.RootDirectory.FullName; Dirs = $dirs } }
+    function Find-Mics {
+        $found = @()
+        foreach ($d in [System.IO.DriveInfo]::GetDrives()) {
+            try {
+                if ($d.DriveType -ne 'Removable' -or -not $d.IsReady) { continue }
+                $dirs = @(Get-ChildItem -LiteralPath $d.RootDirectory.FullName -Directory -Filter 'TX_MIC*' -ErrorAction SilentlyContinue)
+                if ($dirs.Count -gt 0) { $found += [pscustomobject]@{ Root = $d.RootDirectory.FullName; Dirs = $dirs } }
+            } catch { }
+        }
+        return ,$found
     }
+
+    # The mic's USB link drops for a few seconds every minute or so (seen 2026-11-11:
+    # disk errors in the System log, the drive gone and back without unplugging), and
+    # it may come back under another letter. So a failed copy waits for the file to be
+    # reachable again (any letter) and retries it.
+    function Wait-MicFile([string]$dirName, [string]$fileName, [int]$timeoutSec = 90) {
+        $deadline = (Get-Date).AddSeconds($timeoutSec)
+        while ((Get-Date) -lt $deadline) {
+            foreach ($m in (Find-Mics)) {
+                $p = Join-Path (Join-Path $m.Root $dirName) $fileName
+                if (Test-Path -LiteralPath $p) { return $p }
+            }
+            Start-Sleep -Seconds 3
+        }
+        return $null
+    }
+
+    $mics = Find-Mics
 
     # ---- 2. mic -> local archive ----------------------------------------------
     foreach ($mic in $mics) {
@@ -87,25 +110,35 @@ try {
         Log "Mic at $($mic.Root): $($todo.Count) new recording(s), $gb GB -> $LocalArchive"
         Notify 'DJI Mic backup' "Copying $($todo.Count) new recording(s) ($gb GB). Keep the mic plugged in."
 
-        $ok = 0; $failed = 0
+        $ok = 0; $failed = 0; $gone = $false
         foreach ($t in $todo) {
             $part = "$($t.Dest).part"
-            try {
-                New-Item -ItemType Directory -Force -Path $t.DestDir | Out-Null
-                [System.IO.File]::Copy($t.Src.FullName, $part, $true)
-                if ((Get-Item -LiteralPath $part).Length -ne $t.Src.Length) { throw 'size mismatch after copy' }
-                (Get-Item -LiteralPath $part).LastWriteTime = $t.Src.LastWriteTime
-                Move-Item -LiteralPath $part -Destination $t.Dest
-                $ok++
-            } catch {
-                $failed++
-                Log "  FAILED $($t.Src.Name): $($_.Exception.Message)"
-                Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
+            $dirName = $t.Src.Directory.Name
+            $done = $false
+            for ($attempt = 1; $attempt -le 5 -and -not $done; $attempt++) {
+                $src = Wait-MicFile $dirName $t.Src.Name
+                if (-not $src) { $gone = $true; break }
+                try {
+                    New-Item -ItemType Directory -Force -Path $t.DestDir | Out-Null
+                    [System.IO.File]::Copy($src, $part, $true)
+                    if ((Get-Item -LiteralPath $part).Length -ne $t.Src.Length) { throw 'size mismatch after copy' }
+                    (Get-Item -LiteralPath $part).LastWriteTime = $t.Src.LastWriteTime
+                    Move-Item -LiteralPath $part -Destination $t.Dest
+                    $done = $true
+                } catch {
+                    Log "  retry $attempt $($t.Src.Name): $($_.Exception.Message.Trim())"
+                    Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
+                    Start-Sleep -Seconds 5
+                }
             }
+            if ($done) { $ok++ }
+            elseif ($gone) { Log "  mic gone for 90 s - stopping; the next run continues"; break }
+            else { $failed++; Log "  FAILED $($t.Src.Name) after 5 attempts" }
         }
-        Log "  done: $ok copied, $failed failed"
-        if ($failed -gt 0) { Notify 'DJI Mic backup' "$ok copied, $failed FAILED - see laptop-setup\mic-backup.log" }
-        else { Notify 'DJI Mic backup' "Done: $ok recording(s) backed up. You can unplug the mic." }
+        $left = $todo.Count - $ok
+        Log "  done: $ok copied, $left left"
+        if ($left -gt 0) { Notify 'DJI Mic backup' "$ok copied, $left not yet (the mic disconnected). Keep it plugged in - it retries every 2 minutes."; continue }
+        Notify 'DJI Mic backup' "Done: $ok recording(s) backed up. You can unplug the mic."
     }
 
     # ---- 3. local archive -> home PC archive -----------------------------------
