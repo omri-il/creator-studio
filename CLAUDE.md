@@ -309,6 +309,29 @@ Inno Setup went in **per-user**, so `ISCC.exe` is at
   there has no NVIDIA GPU, so it runs on the CPU (hours for a long clip) — use `vps`.
   **Home-PC only:** the DaVinci tiles' Resolve work.
 
+## DJI Mic backup (2026-11-11)
+
+The Osmo Pocket 4's wireless mic ("mic 2", transmitter `TX_MIC001`) can record to its
+own storage. Plugged in by USB it mounts as a FAT32 **removable** drive (any free letter;
+on 2026-11-11 it took the laptop's `E:` because the home `E:` mapping was down) holding
+`TX_MIC001_<ts>\TX00_MICnnn_<yyyyMMdd>_<HHmmss>_orig.wav` (30-minute splits, ~259 MB).
+This is **not part of the app**: a plain script + scheduled task in `laptop-setup\`, so
+it needs no rebuild/reinstall.
+
+- `laptop-setup\mic-backup.ps1`, run every 2 min by the task **`DJIMicBackup`**
+  (`register-mic-backup-task.ps1`, via `mic-backup-hidden.vbs`, from the MAIN checkout).
+  Finds the mic by a `TX_MIC*` folder on a removable drive, copies new `.wav`s to
+  **`C:\Users\omrii\Videos\DJI Mic Archive\<yyyy-MM-dd>\`** (date from the file name),
+  `.part` then rename, same-size = done, different size → `<stem>_<size>.wav`. Then, when
+  `S:` (home `D:`) is mapped, robocopies anything missing to **`S:\DJI Mic Archive`** =
+  home `D:\DJI Mic Archive` (`/XC /XN /XO`: never overwrites). Never deletes anywhere,
+  never touches the mic's files. Balloon notifications on start/end; log
+  `laptop-setup\mic-backup.log` (gitignored).
+- Local first on purpose: the home PC is often unreachable from the laptop (Tailscale),
+  and a local copy is fast; the home copy catches up on its own.
+- Laptop only for now. On the home PC, run `register-mic-backup-task.ps1` there too (the
+  `S:` step is then skipped; point `-LocalArchive` at `D:\DJI Mic Archive` if wanted).
+
 ## VSL publishing (Wistia → Event-Engine)
 
 Render in Resolve, then either:
